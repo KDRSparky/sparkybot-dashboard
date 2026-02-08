@@ -131,6 +131,18 @@
       4: { label: 'Low',      color: '#3b82f6', icon: '🔵' },
       5: { label: 'Minimal',  color: '#6b7280', icon: '⚪' },
     };
+    const ASSIGNEE_PRESETS = {
+      'claude':  { label: '🤖 Claude', color: '#a855f7' },
+      'sparky':  { label: '⚡ Sparky', color: '#f6b93b' },
+      'both':    { label: '🤝 Both',   color: '#3b82f6' },
+    };
+
+    function getAssigneeDisplay(assignedTo) {
+      if (!assignedTo) return null;
+      const preset = ASSIGNEE_PRESETS[assignedTo];
+      if (preset) return preset;
+      return { label: `👤 ${assignedTo}`, color: '#94a3b8' };
+    }
 
     // ============================================
     // Setup Screen
@@ -222,6 +234,8 @@
 
       const handleDragEnd = () => setDragging(false);
 
+      const assignee = getAssigneeDisplay(card.assigned_to);
+
       return (
         <div
           draggable
@@ -246,6 +260,15 @@
 
             {card.project_name && (
               <span className="text-xs text-gray-400 font-mono">{card.project_name}</span>
+            )}
+
+            {assignee && (
+              <span className="text-xs px-2 py-0.5 rounded-full font-mono" style={{
+                background: `${assignee.color}20`,
+                color: assignee.color
+              }}>
+                {assignee.label}
+              </span>
             )}
           </div>
 
@@ -332,7 +355,7 @@
     }
 
     // ============================================
-    // Card Modal (Create/Edit)
+    // Card Modal (Create/Edit) — with Assignee
     // ============================================
     function CardModal({ card, projects, onSave, onClose }) {
       const [title, setTitle] = useState(card?.title || '');
@@ -340,11 +363,34 @@
       const [status, setStatus] = useState(card?.status || 'todo');
       const [priority, setPriority] = useState(card?.priority || 3);
       const [projectId, setProjectId] = useState(card?.project_id || (projects[0]?.id || ''));
+      const [assignee, setAssignee] = useState(card?.assigned_to || '');
+      const [customAssignee, setCustomAssignee] = useState('');
+      const [showCustom, setShowCustom] = useState(false);
       const [saving, setSaving] = useState(false);
+
+      // If card has a custom assignee (not in presets), show in custom field
+      useEffect(() => {
+        if (card?.assigned_to && !ASSIGNEE_PRESETS[card.assigned_to]) {
+          setAssignee('custom');
+          setCustomAssignee(card.assigned_to);
+          setShowCustom(true);
+        }
+      }, [card]);
+
+      const handleAssigneeChange = (val) => {
+        setAssignee(val);
+        if (val === 'custom') {
+          setShowCustom(true);
+        } else {
+          setShowCustom(false);
+          setCustomAssignee('');
+        }
+      };
 
       const handleSave = async () => {
         if (!title.trim()) return;
         setSaving(true);
+        const resolvedAssignee = assignee === 'custom' ? customAssignee.trim().toLowerCase() : (assignee || null);
         await onSave({
           id: card?.id,
           title: title.trim(),
@@ -352,6 +398,7 @@
           status,
           priority: parseInt(priority),
           project_id: projectId,
+          assigned_to: resolvedAssignee || null,
         });
         setSaving(false);
         onClose();
@@ -375,7 +422,7 @@
                 <textarea value={description} onChange={e => setDescription(e.target.value)} placeholder="Optional details..." className="w-full h-24 resize-none" />
               </div>
 
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-mono text-gray-400 mb-1.5 uppercase tracking-wider">Status</label>
                   <select value={status} onChange={e => setStatus(e.target.value)} className="w-full text-sm">
@@ -388,13 +435,39 @@
                     {[1,2,3,4,5].map(p => <option key={p} value={p}>{PRIORITY_CONFIG[p].icon} {PRIORITY_CONFIG[p].label}</option>)}
                   </select>
                 </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-mono text-gray-400 mb-1.5 uppercase tracking-wider">Project</label>
                   <select value={projectId} onChange={e => setProjectId(e.target.value)} className="w-full text-sm">
                     {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
                   </select>
                 </div>
+                <div>
+                  <label className="block text-xs font-mono text-gray-400 mb-1.5 uppercase tracking-wider">Assignee</label>
+                  <select value={assignee} onChange={e => handleAssigneeChange(e.target.value)} className="w-full text-sm">
+                    <option value="">Unassigned</option>
+                    {Object.entries(ASSIGNEE_PRESETS).map(([key, val]) => (
+                      <option key={key} value={key}>{val.label}</option>
+                    ))}
+                    <option value="custom">✏️ Custom...</option>
+                  </select>
+                </div>
               </div>
+
+              {showCustom && (
+                <div className="animate-fade">
+                  <label className="block text-xs font-mono text-gray-400 mb-1.5 uppercase tracking-wider">Custom Assignee Name</label>
+                  <input
+                    value={customAssignee}
+                    onChange={e => setCustomAssignee(e.target.value)}
+                    placeholder="Enter name..."
+                    className="w-full text-sm"
+                    autoFocus
+                  />
+                </div>
+              )}
             </div>
 
             <div className="flex gap-3 mt-6">
@@ -601,19 +674,22 @@
               status: cardData.status,
               priority: cardData.priority,
               project_id: cardData.project_id,
+              assigned_to: cardData.assigned_to,
               updated_at: new Date().toISOString(),
             }).eq('id', cardData.id);
             if (error) throw error;
             showToast('Task updated');
           } else {
-            const { error } = await db.from('kanban_cards').insert({
+            const insert = {
               title: cardData.title,
               description: cardData.description,
               status: cardData.status,
               priority: cardData.priority,
               project_id: cardData.project_id,
               is_anomaly: false,
-            });
+            };
+            if (cardData.assigned_to) insert.assigned_to = cardData.assigned_to;
+            const { error } = await db.from('kanban_cards').insert(insert);
             if (error) throw error;
             showToast('Task created');
           }
@@ -663,10 +739,12 @@
           `_Synced from SparkyBot Dashboard_`,
           `**Status:** ${STATUS_CONFIG[card.status]?.emoji} ${STATUS_CONFIG[card.status]?.label}`,
           `**Priority:** ${PRIORITY_CONFIG[card.priority]?.icon} ${PRIORITY_CONFIG[card.priority]?.label}`,
+          card.assigned_to ? `**Assigned To:** ${getAssigneeDisplay(card.assigned_to)?.label || card.assigned_to}` : '',
         ].filter(Boolean).join('\n');
 
         const labels = [card.status.replace('_', ' '), `P${card.priority}`];
         if (card.is_anomaly) labels.push('anomaly');
+        if (card.assigned_to) labels.push(`assigned:${card.assigned_to}`);
 
         let issueUrl, issueNumber;
         if (card.github_issue_id) {
