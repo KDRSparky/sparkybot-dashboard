@@ -1,0 +1,887 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SparkyBot Command Center</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚡</text></svg>">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            surface: { 50: '#1a1a2e', 100: '#16213e', 200: '#0f3460', 300: '#252547' },
+            amber: { 400: '#f6b93b', 500: '#e58e26', 600: '#d4a017' },
+            slate: { 750: '#293548' }
+          },
+          fontFamily: {
+            mono: ['JetBrains Mono', 'monospace'],
+            sans: ['DM Sans', 'sans-serif'],
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    * { box-sizing: border-box; }
+    body { background: #0a0a1a; color: #e2e8f0; font-family: 'DM Sans', sans-serif; margin: 0; }
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #475569; }
+
+    .kanban-column { min-height: calc(100vh - 220px); }
+    .card-drag { opacity: 0.5; }
+    .drop-target { border: 2px dashed #f6b93b !important; background: rgba(246, 185, 59, 0.05) !important; }
+
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
+    @keyframes slideIn { from { opacity: 0; transform: translateX(-16px); } to { opacity: 1; transform: translateX(0); } }
+    .animate-fade { animation: fadeIn 0.3s ease-out; }
+    .animate-slide { animation: slideIn 0.25s ease-out; }
+    .animate-pulse-slow { animation: pulse 2s infinite; }
+
+    .priority-1 { border-left: 3px solid #ef4444; }
+    .priority-2 { border-left: 3px solid #f97316; }
+    .priority-3 { border-left: 3px solid #eab308; }
+    .priority-4 { border-left: 3px solid #3b82f6; }
+    .priority-5 { border-left: 3px solid #6b7280; }
+
+    .glass { background: rgba(22, 33, 62, 0.6); backdrop-filter: blur(12px); border: 1px solid rgba(255,255,255,0.06); }
+    .glass-hover:hover { background: rgba(22, 33, 62, 0.8); border-color: rgba(255,255,255,0.12); }
+
+    .status-glow { box-shadow: 0 0 20px -5px currentColor; }
+    .btn-amber { background: linear-gradient(135deg, #f6b93b, #e58e26); color: #0a0a1a; font-weight: 600; }
+    .btn-amber:hover { background: linear-gradient(135deg, #f9c74f, #f6b93b); transform: translateY(-1px); box-shadow: 0 4px 12px rgba(246,185,59,0.3); }
+    .btn-amber:active { transform: translateY(0); }
+
+    .modal-overlay { background: rgba(0,0,0,0.7); backdrop-filter: blur(4px); }
+
+    input, textarea, select {
+      background: #1a1a2e;
+      border: 1px solid rgba(255,255,255,0.1);
+      color: #e2e8f0;
+      border-radius: 6px;
+      padding: 10px 14px;
+      font-size: 14px;
+      font-family: 'DM Sans', sans-serif;
+      transition: border-color 0.2s;
+    }
+    input:focus, textarea:focus, select:focus {
+      outline: none;
+      border-color: #f6b93b;
+      box-shadow: 0 0 0 3px rgba(246,185,59,0.15);
+    }
+    select option { background: #1a1a2e; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useCallback, useRef } = React;
+
+    // ============================================
+    // Supabase Connection
+    // ============================================
+    function getStoredConfig() {
+      try {
+        const url = localStorage.getItem('sb_url');
+        const key = localStorage.getItem('sb_key');
+        return url && key ? { url, key } : null;
+      } catch { return null; }
+    }
+
+    function storeConfig(url, key) {
+      localStorage.setItem('sb_url', url);
+      localStorage.setItem('sb_key', key);
+    }
+
+    function clearConfig() {
+      localStorage.removeItem('sb_url');
+      localStorage.removeItem('sb_key');
+    }
+
+    function createSupabaseClient(url, key) {
+      return supabase.createClient(url, key);
+    }
+
+    // ============================================
+    // Constants
+    // ============================================
+    const STATUSES = ['backlog', 'todo', 'in_progress', 'review', 'done'];
+    const STATUS_CONFIG = {
+      backlog:     { label: 'Backlog',     emoji: '📦', color: '#6b7280', bg: 'rgba(107,114,128,0.1)' },
+      todo:        { label: 'To Do',       emoji: '📋', color: '#eab308', bg: 'rgba(234,179,8,0.1)' },
+      in_progress: { label: 'In Progress', emoji: '🔨', color: '#3b82f6', bg: 'rgba(59,130,246,0.1)' },
+      review:      { label: 'Review',      emoji: '🔍', color: '#a855f7', bg: 'rgba(168,85,247,0.1)' },
+      done:        { label: 'Done',        emoji: '✅', color: '#22c55e', bg: 'rgba(34,197,94,0.1)' },
+    };
+    const PRIORITY_CONFIG = {
+      1: { label: 'Critical', color: '#ef4444', icon: '🔴' },
+      2: { label: 'High',     color: '#f97316', icon: '🟠' },
+      3: { label: 'Medium',   color: '#eab308', icon: '🟡' },
+      4: { label: 'Low',      color: '#3b82f6', icon: '🔵' },
+      5: { label: 'Minimal',  color: '#6b7280', icon: '⚪' },
+    };
+
+    // ============================================
+    // Setup Screen
+    // ============================================
+    function SetupScreen({ onConnect }) {
+      const [url, setUrl] = useState('');
+      const [key, setKey] = useState('');
+      const [error, setError] = useState('');
+      const [testing, setTesting] = useState(false);
+
+      const handleConnect = async () => {
+        if (!url || !key) { setError('Both fields are required'); return; }
+        setTesting(true);
+        setError('');
+        try {
+          const client = createSupabaseClient(url, key);
+          const { data, error: dbErr } = await client.from('projects').select('id').limit(1);
+          if (dbErr) throw dbErr;
+          storeConfig(url, key);
+          onConnect(client);
+        } catch (e) {
+          setError(`Connection failed: ${e.message}. Check your URL and anon key.`);
+        }
+        setTesting(false);
+      };
+
+      return (
+        <div className="min-h-screen flex items-center justify-center p-8">
+          <div className="glass rounded-2xl p-10 max-w-lg w-full animate-fade">
+            <div className="text-center mb-8">
+              <div className="text-5xl mb-3">⚡</div>
+              <h1 className="text-2xl font-bold font-mono tracking-tight">SparkyBot Command Center</h1>
+              <p className="text-sm text-gray-400 mt-2">Connect to your Supabase database</p>
+            </div>
+
+            <div className="space-y-5">
+              <div>
+                <label className="block text-xs font-mono text-gray-400 mb-2 uppercase tracking-wider">Supabase URL</label>
+                <input
+                  type="url"
+                  value={url}
+                  onChange={e => setUrl(e.target.value)}
+                  placeholder="https://xxxx.supabase.co"
+                  className="w-full font-mono text-sm"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-mono text-gray-400 mb-2 uppercase tracking-wider">Anon Key</label>
+                <input
+                  type="password"
+                  value={key}
+                  onChange={e => setKey(e.target.value)}
+                  placeholder="eyJhbGciOiJIUzI1NiIs..."
+                  className="w-full font-mono text-sm"
+                />
+                <p className="text-xs text-gray-500 mt-1.5">Found in Supabase → Settings → API → anon public</p>
+              </div>
+
+              {error && <div className="text-red-400 text-sm bg-red-400/10 rounded-lg p-3">{error}</div>}
+
+              <button
+                onClick={handleConnect}
+                disabled={testing}
+                className="btn-amber w-full py-3 rounded-lg text-sm font-mono uppercase tracking-wider transition-all"
+              >
+                {testing ? 'Testing connection...' : 'Connect'}
+              </button>
+            </div>
+
+            <p className="text-xs text-gray-500 mt-6 text-center">
+              Credentials are stored locally in your browser. Never shared.
+            </p>
+          </div>
+        </div>
+      );
+    }
+
+    // ============================================
+    // Card Component
+    // ============================================
+    function KanbanCard({ card, onEdit, onMove, onDelete, onSync }) {
+      const [dragging, setDragging] = useState(false);
+
+      const handleDragStart = (e) => {
+        setDragging(true);
+        e.dataTransfer.setData('text/plain', JSON.stringify({ id: card.id, status: card.status }));
+        e.dataTransfer.effectAllowed = 'move';
+      };
+
+      const handleDragEnd = () => setDragging(false);
+
+      return (
+        <div
+          draggable
+          onDragStart={handleDragStart}
+          onDragEnd={handleDragEnd}
+          className={`glass glass-hover rounded-lg p-4 mb-3 cursor-grab active:cursor-grabbing transition-all animate-slide priority-${card.priority} ${dragging ? 'card-drag' : ''}`}
+        >
+          <div className="flex items-start justify-between gap-2 mb-2">
+            <h3 className="text-sm font-semibold leading-snug flex-1">
+              {card.is_anomaly && <span className="text-amber-400 mr-1">⚠️</span>}
+              {card.title}
+            </h3>
+          </div>
+
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-xs px-2 py-0.5 rounded-full font-mono" style={{
+              background: `${PRIORITY_CONFIG[card.priority]?.color}20`,
+              color: PRIORITY_CONFIG[card.priority]?.color
+            }}>
+              {PRIORITY_CONFIG[card.priority]?.icon} {PRIORITY_CONFIG[card.priority]?.label}
+            </span>
+
+            {card.project_name && (
+              <span className="text-xs text-gray-400 font-mono">{card.project_name}</span>
+            )}
+          </div>
+
+          {card.github_issue_url && (
+            <a href={card.github_issue_url} target="_blank" rel="noopener"
+              className="text-xs text-blue-400 hover:text-blue-300 mt-2 inline-flex items-center gap-1 font-mono">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg>
+              #{card.github_issue_id}
+            </a>
+          )}
+
+          <div className="flex items-center justify-between mt-3 pt-3 border-t border-white/5">
+            <code className="text-[10px] text-gray-500 font-mono">{card.id?.substring(0, 8)}</code>
+            <div className="flex gap-1">
+              {!card.github_issue_url && (
+                <button onClick={() => onSync(card)} className="text-xs text-gray-500 hover:text-blue-400 transition-colors px-1.5 py-0.5 rounded hover:bg-blue-400/10" title="Sync to GitHub">
+                  🔗
+                </button>
+              )}
+              <button onClick={() => onDelete(card)} className="text-xs text-gray-500 hover:text-red-400 transition-colors px-1.5 py-0.5 rounded hover:bg-red-400/10" title="Delete">
+                🗑️
+              </button>
+              <button onClick={() => onEdit(card)} className="text-xs text-gray-500 hover:text-amber-400 transition-colors px-1.5 py-0.5 rounded hover:bg-amber-400/10" title="Edit">
+                ✏️
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ============================================
+    // Column Component
+    // ============================================
+    function KanbanColumn({ status, cards, onDrop, onEdit, onDelete, onSync }) {
+      const [dragOver, setDragOver] = useState(false);
+      const config = STATUS_CONFIG[status];
+
+      const handleDragOver = (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setDragOver(true); };
+      const handleDragLeave = () => setDragOver(false);
+      const handleDrop = (e) => {
+        e.preventDefault();
+        setDragOver(false);
+        try {
+          const data = JSON.parse(e.dataTransfer.getData('text/plain'));
+          if (data.status !== status) onDrop(data.id, status);
+        } catch {}
+      };
+
+      return (
+        <div
+          className={`kanban-column rounded-xl p-3 transition-all ${dragOver ? 'drop-target' : ''}`}
+          style={{ background: config.bg, minWidth: '250px', flex: '1 1 250px' }}
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
+        >
+          <div className="flex items-center justify-between mb-4 px-1">
+            <div className="flex items-center gap-2">
+              <span className="text-lg">{config.emoji}</span>
+              <h2 className="text-sm font-bold font-mono uppercase tracking-wider" style={{ color: config.color }}>
+                {config.label}
+              </h2>
+            </div>
+            <span className="text-xs font-mono px-2 py-0.5 rounded-full" style={{
+              background: `${config.color}20`, color: config.color
+            }}>
+              {cards.length}
+            </span>
+          </div>
+
+          <div className="space-y-0">
+            {cards.map(card => (
+              <KanbanCard key={card.id} card={card} onEdit={onEdit} onMove={onDrop} onDelete={onDelete} onSync={onSync} />
+            ))}
+            {cards.length === 0 && (
+              <div className="text-center py-8 text-gray-600 text-xs font-mono">
+                Drop cards here
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    // ============================================
+    // Card Modal (Create/Edit)
+    // ============================================
+    function CardModal({ card, projects, onSave, onClose }) {
+      const [title, setTitle] = useState(card?.title || '');
+      const [description, setDescription] = useState(card?.description || '');
+      const [status, setStatus] = useState(card?.status || 'todo');
+      const [priority, setPriority] = useState(card?.priority || 3);
+      const [projectId, setProjectId] = useState(card?.project_id || (projects[0]?.id || ''));
+      const [saving, setSaving] = useState(false);
+
+      const handleSave = async () => {
+        if (!title.trim()) return;
+        setSaving(true);
+        await onSave({
+          id: card?.id,
+          title: title.trim(),
+          description: description.trim(),
+          status,
+          priority: parseInt(priority),
+          project_id: projectId,
+        });
+        setSaving(false);
+        onClose();
+      };
+
+      return (
+        <div className="fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4" onClick={onClose}>
+          <div className="glass rounded-2xl p-6 w-full max-w-lg animate-fade" onClick={e => e.stopPropagation()}>
+            <h2 className="text-lg font-bold font-mono mb-5">
+              {card ? 'Edit Task' : 'New Task'}
+            </h2>
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-xs font-mono text-gray-400 mb-1.5 uppercase tracking-wider">Title</label>
+                <input value={title} onChange={e => setTitle(e.target.value)} placeholder="Task title..." className="w-full" autoFocus />
+              </div>
+
+              <div>
+                <label className="block text-xs font-mono text-gray-400 mb-1.5 uppercase tracking-wider">Description</label>
+                <textarea value={description} onChange={e => setDescription(e.target.value)} placeholder="Optional details..." className="w-full h-24 resize-none" />
+              </div>
+
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-xs font-mono text-gray-400 mb-1.5 uppercase tracking-wider">Status</label>
+                  <select value={status} onChange={e => setStatus(e.target.value)} className="w-full text-sm">
+                    {STATUSES.map(s => <option key={s} value={s}>{STATUS_CONFIG[s].emoji} {STATUS_CONFIG[s].label}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-mono text-gray-400 mb-1.5 uppercase tracking-wider">Priority</label>
+                  <select value={priority} onChange={e => setPriority(e.target.value)} className="w-full text-sm">
+                    {[1,2,3,4,5].map(p => <option key={p} value={p}>{PRIORITY_CONFIG[p].icon} {PRIORITY_CONFIG[p].label}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-mono text-gray-400 mb-1.5 uppercase tracking-wider">Project</label>
+                  <select value={projectId} onChange={e => setProjectId(e.target.value)} className="w-full text-sm">
+                    {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex gap-3 mt-6">
+              <button onClick={onClose} className="flex-1 py-2.5 rounded-lg text-sm font-mono text-gray-400 hover:text-white hover:bg-white/5 transition-all">
+                Cancel
+              </button>
+              <button onClick={handleSave} disabled={saving || !title.trim()} className="flex-1 btn-amber py-2.5 rounded-lg text-sm font-mono transition-all disabled:opacity-50">
+                {saving ? 'Saving...' : card ? 'Update' : 'Create'}
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ============================================
+    // Anomaly Panel
+    // ============================================
+    function AnomalyPanel({ anomalies }) {
+      if (anomalies.length === 0) {
+        return (
+          <div className="glass rounded-xl p-4 animate-fade">
+            <div className="flex items-center gap-2 mb-2">
+              <span className="text-lg">✅</span>
+              <h3 className="text-sm font-bold font-mono">System Health</h3>
+            </div>
+            <p className="text-xs text-green-400 font-mono">All systems healthy — no open anomalies</p>
+          </div>
+        );
+      }
+
+      const bySkill = {};
+      anomalies.forEach(a => {
+        const skill = a.anomaly_details?.skillId || 'unknown';
+        bySkill[skill] = (bySkill[skill] || 0) + 1;
+      });
+
+      return (
+        <div className="glass rounded-xl p-4 animate-fade border-l-2 border-amber-400">
+          <div className="flex items-center gap-2 mb-3">
+            <span className="text-lg animate-pulse-slow">⚠️</span>
+            <h3 className="text-sm font-bold font-mono text-amber-400">
+              {anomalies.length} Open Anomal{anomalies.length === 1 ? 'y' : 'ies'}
+            </h3>
+          </div>
+          <div className="space-y-2">
+            {Object.entries(bySkill).map(([skill, count]) => (
+              <div key={skill} className="flex items-center justify-between text-xs font-mono">
+                <span className="text-gray-400">{skill}</span>
+                <span className="text-amber-400 bg-amber-400/10 px-2 py-0.5 rounded-full">{count}</span>
+              </div>
+            ))}
+          </div>
+          <div className="mt-3 pt-3 border-t border-white/5 space-y-1.5">
+            {anomalies.slice(0, 5).map(a => (
+              <div key={a.id} className="text-xs text-gray-400 truncate">
+                {PRIORITY_CONFIG[a.priority]?.icon} {a.title.substring(0, 60)}
+              </div>
+            ))}
+          </div>
+        </div>
+      );
+    }
+
+    // ============================================
+    // Stats Bar
+    // ============================================
+    function StatsBar({ cards, projects }) {
+      const total = cards.length;
+      const inProgress = cards.filter(c => c.status === 'in_progress').length;
+      const anomalies = cards.filter(c => c.is_anomaly && c.status !== 'done').length;
+      const doneThisWeek = cards.filter(c => {
+        if (c.status !== 'done') return false;
+        const updated = new Date(c.updated_at);
+        const weekAgo = new Date(); weekAgo.setDate(weekAgo.getDate() - 7);
+        return updated > weekAgo;
+      }).length;
+
+      const stats = [
+        { label: 'Active', value: total - cards.filter(c => c.status === 'done').length, color: '#f6b93b' },
+        { label: 'In Progress', value: inProgress, color: '#3b82f6' },
+        { label: 'Done (7d)', value: doneThisWeek, color: '#22c55e' },
+        { label: 'Anomalies', value: anomalies, color: anomalies > 0 ? '#ef4444' : '#22c55e' },
+        { label: 'Projects', value: projects.length, color: '#a855f7' },
+      ];
+
+      return (
+        <div className="flex gap-4 overflow-x-auto pb-2">
+          {stats.map(s => (
+            <div key={s.label} className="glass rounded-lg px-4 py-3 min-w-[120px]">
+              <div className="text-2xl font-bold font-mono" style={{ color: s.color }}>{s.value}</div>
+              <div className="text-[10px] font-mono text-gray-500 uppercase tracking-wider mt-0.5">{s.label}</div>
+            </div>
+          ))}
+        </div>
+      );
+    }
+
+    // ============================================
+    // Confirm Dialog
+    // ============================================
+    function ConfirmDialog({ title, message, onConfirm, onCancel }) {
+      return (
+        <div className="fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4" onClick={onCancel}>
+          <div className="glass rounded-2xl p-6 w-full max-w-sm animate-fade" onClick={e => e.stopPropagation()}>
+            <h2 className="text-lg font-bold font-mono mb-2">{title}</h2>
+            <p className="text-sm text-gray-400 mb-5">{message}</p>
+            <div className="flex gap-3">
+              <button onClick={onCancel} className="flex-1 py-2.5 rounded-lg text-sm font-mono text-gray-400 hover:text-white hover:bg-white/5 transition-all">Cancel</button>
+              <button onClick={onConfirm} className="flex-1 py-2.5 rounded-lg text-sm font-mono bg-red-500/20 text-red-400 hover:bg-red-500/30 transition-all">Delete</button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ============================================
+    // Toast Notification
+    // ============================================
+    function Toast({ message, type, onDismiss }) {
+      useEffect(() => {
+        const timer = setTimeout(onDismiss, 3000);
+        return () => clearTimeout(timer);
+      }, []);
+
+      const colors = {
+        success: 'bg-green-500/20 text-green-400 border-green-500/30',
+        error: 'bg-red-500/20 text-red-400 border-red-500/30',
+        info: 'bg-blue-500/20 text-blue-400 border-blue-500/30',
+      };
+
+      return (
+        <div className={`fixed bottom-6 right-6 z-50 ${colors[type]} border rounded-lg px-4 py-3 text-sm font-mono animate-fade shadow-xl`}>
+          {message}
+        </div>
+      );
+    }
+
+    // ============================================
+    // Main Dashboard
+    // ============================================
+    function Dashboard({ db }) {
+      const [cards, setCards] = useState([]);
+      const [projects, setProjects] = useState([]);
+      const [loading, setLoading] = useState(true);
+      const [filterProject, setFilterProject] = useState('all');
+      const [showDone, setShowDone] = useState(false);
+      const [modalCard, setModalCard] = useState(undefined); // undefined=closed, null=new, card=edit
+      const [confirmDelete, setConfirmDelete] = useState(null);
+      const [toast, setToast] = useState(null);
+      const [view, setView] = useState('board'); // board | anomalies
+
+      const showToast = (message, type = 'success') => setToast({ message, type });
+
+      const fetchData = useCallback(async () => {
+        try {
+          const [cardsRes, projectsRes] = await Promise.all([
+            db.from('kanban_cards').select('*, projects(name)').order('priority', { ascending: true }).order('created_at', { ascending: false }),
+            db.from('projects').select('*').neq('status', 'archived').order('name'),
+          ]);
+          if (cardsRes.error) throw cardsRes.error;
+          if (projectsRes.error) throw projectsRes.error;
+
+          const mappedCards = (cardsRes.data || []).map(c => ({
+            ...c,
+            project_name: c.projects?.name || projectsRes.data?.find(p => p.id === c.project_id)?.name || ''
+          }));
+
+          setCards(mappedCards);
+          setProjects(projectsRes.data || []);
+        } catch (e) {
+          console.error('Fetch error:', e);
+          showToast(`Failed to load data: ${e.message}`, 'error');
+        }
+        setLoading(false);
+      }, [db]);
+
+      useEffect(() => { fetchData(); }, [fetchData]);
+
+      // Auto-refresh every 30 seconds
+      useEffect(() => {
+        const interval = setInterval(fetchData, 30000);
+        return () => clearInterval(interval);
+      }, [fetchData]);
+
+      const handleDrop = async (cardId, newStatus) => {
+        setCards(prev => prev.map(c => c.id === cardId ? { ...c, status: newStatus } : c));
+        try {
+          const { error } = await db.from('kanban_cards').update({ status: newStatus, updated_at: new Date().toISOString() }).eq('id', cardId);
+          if (error) throw error;
+          showToast(`Moved to ${STATUS_CONFIG[newStatus].label}`);
+        } catch (e) {
+          showToast(`Move failed: ${e.message}`, 'error');
+          fetchData();
+        }
+      };
+
+      const handleSave = async (cardData) => {
+        try {
+          if (cardData.id) {
+            const { error } = await db.from('kanban_cards').update({
+              title: cardData.title,
+              description: cardData.description,
+              status: cardData.status,
+              priority: cardData.priority,
+              project_id: cardData.project_id,
+              updated_at: new Date().toISOString(),
+            }).eq('id', cardData.id);
+            if (error) throw error;
+            showToast('Task updated');
+          } else {
+            const { error } = await db.from('kanban_cards').insert({
+              title: cardData.title,
+              description: cardData.description,
+              status: cardData.status,
+              priority: cardData.priority,
+              project_id: cardData.project_id,
+              is_anomaly: false,
+            });
+            if (error) throw error;
+            showToast('Task created');
+          }
+          fetchData();
+        } catch (e) {
+          showToast(`Save failed: ${e.message}`, 'error');
+        }
+      };
+
+      const handleDelete = async (card) => {
+        try {
+          const { error } = await db.from('kanban_cards').delete().eq('id', card.id);
+          if (error) throw error;
+          setCards(prev => prev.filter(c => c.id !== card.id));
+          showToast('Task deleted');
+        } catch (e) {
+          showToast(`Delete failed: ${e.message}`, 'error');
+        }
+        setConfirmDelete(null);
+      };
+
+      const handleSync = async (card) => {
+        showToast('Syncing to GitHub...', 'info');
+        try {
+          const ghToken = localStorage.getItem('gh_token');
+          if (!ghToken) {
+            const token = prompt('Enter your GitHub Personal Access Token (stored locally):');
+            if (!token) return;
+            localStorage.setItem('gh_token', token);
+            await doGithubSync(card, token);
+          } else {
+            await doGithubSync(card, ghToken);
+          }
+        } catch (e) {
+          showToast(`Sync failed: ${e.message}`, 'error');
+        }
+      };
+
+      const doGithubSync = async (card, token) => {
+        const project = projects.find(p => p.id === card.project_id);
+        const repo = project?.github_repo || 'KDRSparky/sparkybot';
+        const [owner, repoName] = repo.includes('/') ? repo.split('/') : ['KDRSparky', repo];
+
+        const body = [
+          card.description || '',
+          '', '---',
+          `_Synced from SparkyBot Dashboard_`,
+          `**Status:** ${STATUS_CONFIG[card.status]?.emoji} ${STATUS_CONFIG[card.status]?.label}`,
+          `**Priority:** ${PRIORITY_CONFIG[card.priority]?.icon} ${PRIORITY_CONFIG[card.priority]?.label}`,
+        ].filter(Boolean).join('\n');
+
+        const labels = [card.status.replace('_', ' '), `P${card.priority}`];
+        if (card.is_anomaly) labels.push('anomaly');
+
+        let issueUrl, issueNumber;
+        if (card.github_issue_id) {
+          const res = await fetch(`https://api.github.com/repos/${owner}/${repoName}/issues/${card.github_issue_id}`, {
+            method: 'PATCH',
+            headers: { 'Authorization': `token ${token}`, 'Accept': 'application/vnd.github.v3+json', 'Content-Type': 'application/json' },
+            body: JSON.stringify({ title: card.title, body, state: card.status === 'done' ? 'closed' : 'open', labels }),
+          });
+          if (!res.ok) throw new Error(`GitHub ${res.status}`);
+          const issue = await res.json();
+          issueUrl = issue.html_url;
+          issueNumber = issue.number;
+        } else {
+          const res = await fetch(`https://api.github.com/repos/${owner}/${repoName}/issues`, {
+            method: 'POST',
+            headers: { 'Authorization': `token ${token}`, 'Accept': 'application/vnd.github.v3+json', 'Content-Type': 'application/json' },
+            body: JSON.stringify({ title: card.title, body, labels }),
+          });
+          if (!res.ok) throw new Error(`GitHub ${res.status}`);
+          const issue = await res.json();
+          issueUrl = issue.html_url;
+          issueNumber = issue.number;
+        }
+
+        await db.from('kanban_cards').update({
+          github_issue_id: issueNumber,
+          github_issue_url: issueUrl,
+          updated_at: new Date().toISOString(),
+        }).eq('id', card.id);
+
+        fetchData();
+        showToast(`Synced to GitHub #${issueNumber}`);
+      };
+
+      const handleDisconnect = () => {
+        clearConfig();
+        window.location.reload();
+      };
+
+      let filteredCards = cards;
+      if (filterProject !== 'all') {
+        filteredCards = cards.filter(c => c.project_id === filterProject);
+      }
+      if (!showDone) {
+        filteredCards = filteredCards.filter(c => c.status !== 'done');
+      }
+
+      const anomalies = cards.filter(c => c.is_anomaly && c.status !== 'done');
+      const cardsByStatus = {};
+      STATUSES.forEach(s => { cardsByStatus[s] = filteredCards.filter(c => c.status === s); });
+
+      if (loading) {
+        return (
+          <div className="min-h-screen flex items-center justify-center">
+            <div className="text-center animate-fade">
+              <div className="text-4xl mb-3 animate-pulse-slow">⚡</div>
+              <div className="text-sm font-mono text-gray-400">Loading command center...</div>
+            </div>
+          </div>
+        );
+      }
+
+      return (
+        <div className="min-h-screen">
+          <header className="sticky top-0 z-40 glass border-b border-white/5">
+            <div className="max-w-[1800px] mx-auto px-4 sm:px-6 py-3">
+              <div className="flex items-center justify-between flex-wrap gap-3">
+                <div className="flex items-center gap-3">
+                  <span className="text-2xl">⚡</span>
+                  <div>
+                    <h1 className="text-base font-bold font-mono tracking-tight">SparkyBot</h1>
+                    <span className="text-[10px] font-mono text-gray-500 uppercase tracking-widest">Command Center</span>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-3 flex-wrap">
+                  <div className="flex glass rounded-lg overflow-hidden">
+                    <button
+                      onClick={() => setView('board')}
+                      className={`px-3 py-1.5 text-xs font-mono transition-all ${view === 'board' ? 'bg-amber-400/20 text-amber-400' : 'text-gray-400 hover:text-white'}`}
+                    >Board</button>
+                    <button
+                      onClick={() => setView('anomalies')}
+                      className={`px-3 py-1.5 text-xs font-mono transition-all relative ${view === 'anomalies' ? 'bg-amber-400/20 text-amber-400' : 'text-gray-400 hover:text-white'}`}
+                    >
+                      Anomalies
+                      {anomalies.length > 0 && (
+                        <span className="absolute -top-1 -right-1 bg-red-500 text-white text-[9px] w-4 h-4 rounded-full flex items-center justify-center">{anomalies.length}</span>
+                      )}
+                    </button>
+                  </div>
+
+                  <select
+                    value={filterProject}
+                    onChange={e => setFilterProject(e.target.value)}
+                    className="text-xs font-mono py-1.5 px-2 rounded-lg"
+                  >
+                    <option value="all">All Projects</option>
+                    {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                  </select>
+
+                  <label className="flex items-center gap-1.5 text-xs font-mono text-gray-400 cursor-pointer select-none">
+                    <input type="checkbox" checked={showDone} onChange={e => setShowDone(e.target.checked)}
+                      className="rounded border-gray-600 bg-transparent text-amber-400 focus:ring-amber-400/30" />
+                    Done
+                  </label>
+
+                  <button onClick={() => setModalCard(null)} className="btn-amber px-4 py-1.5 rounded-lg text-xs font-mono transition-all">
+                    + New Task
+                  </button>
+
+                  <button onClick={fetchData} className="text-gray-500 hover:text-amber-400 transition-colors p-1.5" title="Refresh">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M1 4v6h6"/><path d="M3.51 15a9 9 0 102.13-9.36L1 10"/></svg>
+                  </button>
+
+                  <button onClick={handleDisconnect} className="text-gray-600 hover:text-red-400 transition-colors p-1.5" title="Disconnect">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </header>
+
+          <div className="max-w-[1800px] mx-auto px-4 sm:px-6 pt-5 pb-3">
+            <StatsBar cards={cards} projects={projects} />
+          </div>
+
+          <main className="max-w-[1800px] mx-auto px-4 sm:px-6 pb-8">
+            {view === 'board' ? (
+              <div className="flex gap-4 overflow-x-auto pt-3 pb-4">
+                {STATUSES.filter(s => showDone || s !== 'done').map(status => (
+                  <KanbanColumn
+                    key={status}
+                    status={status}
+                    cards={cardsByStatus[status] || []}
+                    onDrop={handleDrop}
+                    onEdit={setModalCard}
+                    onDelete={setConfirmDelete}
+                    onSync={handleSync}
+                  />
+                ))}
+              </div>
+            ) : (
+              <div className="max-w-2xl pt-4 space-y-4">
+                <AnomalyPanel anomalies={anomalies} />
+                {anomalies.map(a => (
+                  <div key={a.id} className={`glass rounded-lg p-4 animate-slide priority-${a.priority}`}>
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <h3 className="text-sm font-semibold">{a.title}</h3>
+                        {a.anomaly_details && (
+                          <div className="text-xs text-gray-500 font-mono mt-1.5 space-y-0.5">
+                            <div>Skill: {a.anomaly_details.skillId}</div>
+                            <div>Error: {a.anomaly_details.errorMessage?.substring(0, 100)}</div>
+                            <div>Created: {new Date(a.anomaly_details.createdAt).toLocaleDateString()}</div>
+                          </div>
+                        )}
+                      </div>
+                      <span className="text-xs px-2 py-0.5 rounded-full shrink-0" style={{
+                        background: `${PRIORITY_CONFIG[a.priority]?.color}20`,
+                        color: PRIORITY_CONFIG[a.priority]?.color
+                      }}>
+                        {PRIORITY_CONFIG[a.priority]?.label}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </main>
+
+          {modalCard !== undefined && (
+            <CardModal
+              card={modalCard}
+              projects={projects}
+              onSave={handleSave}
+              onClose={() => setModalCard(undefined)}
+            />
+          )}
+
+          {confirmDelete && (
+            <ConfirmDialog
+              title="Delete Task"
+              message={`Permanently delete "${confirmDelete.title}"?`}
+              onConfirm={() => handleDelete(confirmDelete)}
+              onCancel={() => setConfirmDelete(null)}
+            />
+          )}
+
+          {toast && <Toast {...toast} onDismiss={() => setToast(null)} />}
+        </div>
+      );
+    }
+
+    // ============================================
+    // App Root
+    // ============================================
+    function App() {
+      const [db, setDb] = useState(null);
+
+      useEffect(() => {
+        const config = getStoredConfig();
+        if (config) {
+          try {
+            const client = createSupabaseClient(config.url, config.key);
+            setDb(client);
+          } catch { clearConfig(); }
+        }
+      }, []);
+
+      if (!db) return <SetupScreen onConnect={setDb} />;
+      return <Dashboard db={db} />;
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>
