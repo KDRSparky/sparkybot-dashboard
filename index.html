@@ -585,7 +585,7 @@
           setLoading(false);
         }
         load();
-      }, [db]);
+      }, []);
 
       if (loading) return <div className="text-center py-12 text-gray-500 font-mono text-sm animate-pulse-slow">Loading portfolio...</div>;
       if (snapshots.length === 0) return (
@@ -727,7 +727,7 @@
           setHasMore(data.length === PAGE_SIZE);
         }
         setLoading(false);
-      }, [db]);
+      }, []);
 
       useEffect(() => { fetchMessages(0); }, [fetchMessages]);
 
@@ -884,7 +884,7 @@
         const { data } = await db.from('vip_contacts').select('*').order('priority', { ascending: true }).order('name');
         setContacts(data || []);
         setLoading(false);
-      }, [db]);
+      }, []);
 
       useEffect(() => { fetchContacts(); }, [fetchContacts]);
 
@@ -1026,11 +1026,9 @@
 
       const fetchData = useCallback(async () => {
         try {
-          const [cardsRes, projectsRes, snapshotsRes, vipRes] = await Promise.all([
+          const [cardsRes, projectsRes] = await Promise.all([
             db.from('kanban_cards').select('*, projects(name)').order('priority', { ascending: true }).order('created_at', { ascending: false }),
             db.from('projects').select('*').neq('status', 'archived').order('name'),
-            db.from('portfolio_snapshots').select('*').order('snapshot_date', { ascending: false }).limit(1),
-            db.from('vip_contacts').select('id'),
           ]);
           if (cardsRes.error) throw cardsRes.error;
 
@@ -1041,14 +1039,23 @@
 
           setCards(mappedCards);
           setProjects(projectsRes.data || []);
-          setSnapshots(snapshotsRes.data || []);
-          setVipContacts(vipRes.data || []);
+
+          // These tables may not have RLS policies yet — fetch silently
+          try {
+            const snapshotsRes = await db.from('portfolio_snapshots').select('*').order('snapshot_date', { ascending: false }).limit(1);
+            setSnapshots(snapshotsRes.data || []);
+          } catch { setSnapshots([]); }
+
+          try {
+            const vipRes = await db.from('vip_contacts').select('id');
+            setVipContacts(vipRes.data || []);
+          } catch { setVipContacts([]); }
+
         } catch (e) {
           console.error('Fetch error:', e);
-          showToast(`Failed to load data: ${e.message}`, 'error');
         }
         setLoading(false);
-      }, [db]);
+      }, []);
 
       useEffect(() => { fetchData(); }, [fetchData]);
 
