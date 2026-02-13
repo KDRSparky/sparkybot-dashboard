@@ -1225,7 +1225,8 @@
                 </div>
 
                 <div className="flex items-center gap-3 flex-wrap">
-                  {tab === 'board' && <select
+                  {tab === 'board' && <>
+                    <select
                     value={filterProject}
                     onChange={e => setFilterProject(e.target.value)}
                     className="text-xs font-mono py-1.5 px-2 rounded-lg"
@@ -1243,6 +1244,7 @@
                   <button onClick={() => setModalCard(null)} className="btn-amber px-4 py-1.5 rounded-lg text-xs font-mono transition-all">
                     + New Task
                   </button>
+                  </>}
 
                   <button onClick={fetchData} className="text-gray-500 hover:text-amber-400 transition-colors p-1.5" title="Refresh">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M1 4v6h6"/><path d="M3.51 15a9 9 0 102.13-9.36L1 10"/></svg>
