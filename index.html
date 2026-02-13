@@ -10,6 +10,7 @@
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   <script>
@@ -37,7 +38,7 @@
     ::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
     ::-webkit-scrollbar-thumb:hover { background: #475569; }
 
-    .kanban-column { min-height: calc(100vh - 220px); }
+    .kanban-column { min-height: calc(100vh - 280px); }
     .card-drag { opacity: 0.5; }
     .drop-target { border: 2px dashed #f6b93b !important; background: rgba(246, 185, 59, 0.05) !important; }
 
@@ -80,6 +81,17 @@
       box-shadow: 0 0 0 3px rgba(246,185,59,0.15);
     }
     select option { background: #1a1a2e; }
+
+    .chat-bubble-user { background: rgba(246, 185, 59, 0.15); border: 1px solid rgba(246, 185, 59, 0.2); }
+    .chat-bubble-bot { background: rgba(22, 33, 62, 0.8); border: 1px solid rgba(255,255,255,0.06); }
+
+    .tab-active { color: #f6b93b; border-bottom: 2px solid #f6b93b; }
+    .tab-inactive { color: #6b7280; border-bottom: 2px solid transparent; }
+    .tab-inactive:hover { color: #94a3b8; }
+
+    .vip-priority-1 { border-left: 3px solid #ef4444; }
+    .vip-priority-2 { border-left: 3px solid #f97316; }
+    .vip-priority-3 { border-left: 3px solid #eab308; }
   </style>
 </head>
 <body>
@@ -142,6 +154,27 @@
       const preset = ASSIGNEE_PRESETS[assignedTo];
       if (preset) return preset;
       return { label: `👤 ${assignedTo}`, color: '#94a3b8' };
+    }
+
+    function formatTime(dateStr) {
+      const d = new Date(dateStr);
+      const now = new Date();
+      const diffMs = now - d;
+      const diffMin = Math.floor(diffMs / 60000);
+      const diffHr = Math.floor(diffMs / 3600000);
+      const diffDays = Math.floor(diffMs / 86400000);
+      if (diffMin < 1) return 'Just now';
+      if (diffMin < 60) return `${diffMin}m ago`;
+      if (diffHr < 24) return `${diffHr}h ago`;
+      if (diffDays < 7) return `${diffDays}d ago`;
+      return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    }
+
+    function formatDate(dateStr) {
+      return new Date(dateStr).toLocaleDateString('en-US', {
+        month: 'short', day: 'numeric', year: 'numeric',
+        hour: 'numeric', minute: '2-digit',
+      });
     }
 
     // ============================================
@@ -221,347 +254,21 @@
     }
 
     // ============================================
-    // Card Component
+    // Toast Notification
     // ============================================
-    function KanbanCard({ card, onEdit, onMove, onDelete, onSync }) {
-      const [dragging, setDragging] = useState(false);
-
-      const handleDragStart = (e) => {
-        setDragging(true);
-        e.dataTransfer.setData('text/plain', JSON.stringify({ id: card.id, status: card.status }));
-        e.dataTransfer.effectAllowed = 'move';
-      };
-
-      const handleDragEnd = () => setDragging(false);
-
-      const assignee = getAssigneeDisplay(card.assigned_to);
-
-      return (
-        <div
-          draggable
-          onDragStart={handleDragStart}
-          onDragEnd={handleDragEnd}
-          className={`glass glass-hover rounded-lg p-4 mb-3 cursor-grab active:cursor-grabbing transition-all animate-slide priority-${card.priority} ${dragging ? 'card-drag' : ''}`}
-        >
-          <div className="flex items-start justify-between gap-2 mb-2">
-            <h3 className="text-sm font-semibold leading-snug flex-1">
-              {card.is_anomaly && <span className="text-amber-400 mr-1">⚠️</span>}
-              {card.title}
-            </h3>
-          </div>
-
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-xs px-2 py-0.5 rounded-full font-mono" style={{
-              background: `${PRIORITY_CONFIG[card.priority]?.color}20`,
-              color: PRIORITY_CONFIG[card.priority]?.color
-            }}>
-              {PRIORITY_CONFIG[card.priority]?.icon} {PRIORITY_CONFIG[card.priority]?.label}
-            </span>
-
-            {card.project_name && (
-              <span className="text-xs text-gray-400 font-mono">{card.project_name}</span>
-            )}
-
-            {assignee && (
-              <span className="text-xs px-2 py-0.5 rounded-full font-mono" style={{
-                background: `${assignee.color}20`,
-                color: assignee.color
-              }}>
-                {assignee.label}
-              </span>
-            )}
-          </div>
-
-          {card.github_issue_url && (
-            <a href={card.github_issue_url} target="_blank" rel="noopener"
-              className="text-xs text-blue-400 hover:text-blue-300 mt-2 inline-flex items-center gap-1 font-mono">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg>
-              #{card.github_issue_id}
-            </a>
-          )}
-
-          <div className="flex items-center justify-between mt-3 pt-3 border-t border-white/5">
-            <code className="text-[10px] text-gray-500 font-mono">{card.id?.substring(0, 8)}</code>
-            <div className="flex gap-1">
-              {!card.github_issue_url && (
-                <button onClick={() => onSync(card)} className="text-xs text-gray-500 hover:text-blue-400 transition-colors px-1.5 py-0.5 rounded hover:bg-blue-400/10" title="Sync to GitHub">
-                  🔗
-                </button>
-              )}
-              <button onClick={() => onDelete(card)} className="text-xs text-gray-500 hover:text-red-400 transition-colors px-1.5 py-0.5 rounded hover:bg-red-400/10" title="Delete">
-                🗑️
-              </button>
-              <button onClick={() => onEdit(card)} className="text-xs text-gray-500 hover:text-amber-400 transition-colors px-1.5 py-0.5 rounded hover:bg-amber-400/10" title="Edit">
-                ✏️
-              </button>
-            </div>
-          </div>
-        </div>
-      );
-    }
-
-    // ============================================
-    // Column Component
-    // ============================================
-    function KanbanColumn({ status, cards, onDrop, onEdit, onDelete, onSync }) {
-      const [dragOver, setDragOver] = useState(false);
-      const config = STATUS_CONFIG[status];
-
-      const handleDragOver = (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setDragOver(true); };
-      const handleDragLeave = () => setDragOver(false);
-      const handleDrop = (e) => {
-        e.preventDefault();
-        setDragOver(false);
-        try {
-          const data = JSON.parse(e.dataTransfer.getData('text/plain'));
-          if (data.status !== status) onDrop(data.id, status);
-        } catch {}
-      };
-
-      return (
-        <div
-          className={`kanban-column rounded-xl p-3 transition-all ${dragOver ? 'drop-target' : ''}`}
-          style={{ background: config.bg, minWidth: '250px', flex: '1 1 250px' }}
-          onDragOver={handleDragOver}
-          onDragLeave={handleDragLeave}
-          onDrop={handleDrop}
-        >
-          <div className="flex items-center justify-between mb-4 px-1">
-            <div className="flex items-center gap-2">
-              <span className="text-lg">{config.emoji}</span>
-              <h2 className="text-sm font-bold font-mono uppercase tracking-wider" style={{ color: config.color }}>
-                {config.label}
-              </h2>
-            </div>
-            <span className="text-xs font-mono px-2 py-0.5 rounded-full" style={{
-              background: `${config.color}20`, color: config.color
-            }}>
-              {cards.length}
-            </span>
-          </div>
-
-          <div className="space-y-0">
-            {cards.map(card => (
-              <KanbanCard key={card.id} card={card} onEdit={onEdit} onMove={onDrop} onDelete={onDelete} onSync={onSync} />
-            ))}
-            {cards.length === 0 && (
-              <div className="text-center py-8 text-gray-600 text-xs font-mono">
-                Drop cards here
-              </div>
-            )}
-          </div>
-        </div>
-      );
-    }
-
-    // ============================================
-    // Card Modal (Create/Edit) — with Assignee
-    // ============================================
-    function CardModal({ card, projects, onSave, onClose }) {
-      const [title, setTitle] = useState(card?.title || '');
-      const [description, setDescription] = useState(card?.description || '');
-      const [status, setStatus] = useState(card?.status || 'todo');
-      const [priority, setPriority] = useState(card?.priority || 3);
-      const [projectId, setProjectId] = useState(card?.project_id || (projects[0]?.id || ''));
-      const [assignee, setAssignee] = useState(card?.assigned_to || '');
-      const [customAssignee, setCustomAssignee] = useState('');
-      const [showCustom, setShowCustom] = useState(false);
-      const [saving, setSaving] = useState(false);
-
-      // If card has a custom assignee (not in presets), show in custom field
+    function Toast({ message, type, onDismiss }) {
       useEffect(() => {
-        if (card?.assigned_to && !ASSIGNEE_PRESETS[card.assigned_to]) {
-          setAssignee('custom');
-          setCustomAssignee(card.assigned_to);
-          setShowCustom(true);
-        }
-      }, [card]);
-
-      const handleAssigneeChange = (val) => {
-        setAssignee(val);
-        if (val === 'custom') {
-          setShowCustom(true);
-        } else {
-          setShowCustom(false);
-          setCustomAssignee('');
-        }
+        const timer = setTimeout(onDismiss, 3000);
+        return () => clearTimeout(timer);
+      }, []);
+      const colors = {
+        success: 'bg-green-500/20 text-green-400 border-green-500/30',
+        error: 'bg-red-500/20 text-red-400 border-red-500/30',
+        info: 'bg-blue-500/20 text-blue-400 border-blue-500/30',
       };
-
-      const handleSave = async () => {
-        if (!title.trim()) return;
-        setSaving(true);
-        const resolvedAssignee = assignee === 'custom' ? customAssignee.trim().toLowerCase() : (assignee || null);
-        await onSave({
-          id: card?.id,
-          title: title.trim(),
-          description: description.trim(),
-          status,
-          priority: parseInt(priority),
-          project_id: projectId,
-          assigned_to: resolvedAssignee || null,
-        });
-        setSaving(false);
-        onClose();
-      };
-
       return (
-        <div className="fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4" onClick={onClose}>
-          <div className="glass rounded-2xl p-6 w-full max-w-lg animate-fade" onClick={e => e.stopPropagation()}>
-            <h2 className="text-lg font-bold font-mono mb-5">
-              {card ? 'Edit Task' : 'New Task'}
-            </h2>
-
-            <div className="space-y-4">
-              <div>
-                <label className="block text-xs font-mono text-gray-400 mb-1.5 uppercase tracking-wider">Title</label>
-                <input value={title} onChange={e => setTitle(e.target.value)} placeholder="Task title..." className="w-full" autoFocus />
-              </div>
-
-              <div>
-                <label className="block text-xs font-mono text-gray-400 mb-1.5 uppercase tracking-wider">Description</label>
-                <textarea value={description} onChange={e => setDescription(e.target.value)} placeholder="Optional details..." className="w-full h-24 resize-none" />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-mono text-gray-400 mb-1.5 uppercase tracking-wider">Status</label>
-                  <select value={status} onChange={e => setStatus(e.target.value)} className="w-full text-sm">
-                    {STATUSES.map(s => <option key={s} value={s}>{STATUS_CONFIG[s].emoji} {STATUS_CONFIG[s].label}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs font-mono text-gray-400 mb-1.5 uppercase tracking-wider">Priority</label>
-                  <select value={priority} onChange={e => setPriority(e.target.value)} className="w-full text-sm">
-                    {[1,2,3,4,5].map(p => <option key={p} value={p}>{PRIORITY_CONFIG[p].icon} {PRIORITY_CONFIG[p].label}</option>)}
-                  </select>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-mono text-gray-400 mb-1.5 uppercase tracking-wider">Project</label>
-                  <select value={projectId} onChange={e => setProjectId(e.target.value)} className="w-full text-sm">
-                    {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs font-mono text-gray-400 mb-1.5 uppercase tracking-wider">Assignee</label>
-                  <select value={assignee} onChange={e => handleAssigneeChange(e.target.value)} className="w-full text-sm">
-                    <option value="">Unassigned</option>
-                    {Object.entries(ASSIGNEE_PRESETS).map(([key, val]) => (
-                      <option key={key} value={key}>{val.label}</option>
-                    ))}
-                    <option value="custom">✏️ Custom...</option>
-                  </select>
-                </div>
-              </div>
-
-              {showCustom && (
-                <div className="animate-fade">
-                  <label className="block text-xs font-mono text-gray-400 mb-1.5 uppercase tracking-wider">Custom Assignee Name</label>
-                  <input
-                    value={customAssignee}
-                    onChange={e => setCustomAssignee(e.target.value)}
-                    placeholder="Enter name..."
-                    className="w-full text-sm"
-                    autoFocus
-                  />
-                </div>
-              )}
-            </div>
-
-            <div className="flex gap-3 mt-6">
-              <button onClick={onClose} className="flex-1 py-2.5 rounded-lg text-sm font-mono text-gray-400 hover:text-white hover:bg-white/5 transition-all">
-                Cancel
-              </button>
-              <button onClick={handleSave} disabled={saving || !title.trim()} className="flex-1 btn-amber py-2.5 rounded-lg text-sm font-mono transition-all disabled:opacity-50">
-                {saving ? 'Saving...' : card ? 'Update' : 'Create'}
-              </button>
-            </div>
-          </div>
-        </div>
-      );
-    }
-
-    // ============================================
-    // Anomaly Panel
-    // ============================================
-    function AnomalyPanel({ anomalies }) {
-      if (anomalies.length === 0) {
-        return (
-          <div className="glass rounded-xl p-4 animate-fade">
-            <div className="flex items-center gap-2 mb-2">
-              <span className="text-lg">✅</span>
-              <h3 className="text-sm font-bold font-mono">System Health</h3>
-            </div>
-            <p className="text-xs text-green-400 font-mono">All systems healthy — no open anomalies</p>
-          </div>
-        );
-      }
-
-      const bySkill = {};
-      anomalies.forEach(a => {
-        const skill = a.anomaly_details?.skillId || 'unknown';
-        bySkill[skill] = (bySkill[skill] || 0) + 1;
-      });
-
-      return (
-        <div className="glass rounded-xl p-4 animate-fade border-l-2 border-amber-400">
-          <div className="flex items-center gap-2 mb-3">
-            <span className="text-lg animate-pulse-slow">⚠️</span>
-            <h3 className="text-sm font-bold font-mono text-amber-400">
-              {anomalies.length} Open Anomal{anomalies.length === 1 ? 'y' : 'ies'}
-            </h3>
-          </div>
-          <div className="space-y-2">
-            {Object.entries(bySkill).map(([skill, count]) => (
-              <div key={skill} className="flex items-center justify-between text-xs font-mono">
-                <span className="text-gray-400">{skill}</span>
-                <span className="text-amber-400 bg-amber-400/10 px-2 py-0.5 rounded-full">{count}</span>
-              </div>
-            ))}
-          </div>
-          <div className="mt-3 pt-3 border-t border-white/5 space-y-1.5">
-            {anomalies.slice(0, 5).map(a => (
-              <div key={a.id} className="text-xs text-gray-400 truncate">
-                {PRIORITY_CONFIG[a.priority]?.icon} {a.title.substring(0, 60)}
-              </div>
-            ))}
-          </div>
-        </div>
-      );
-    }
-
-    // ============================================
-    // Stats Bar
-    // ============================================
-    function StatsBar({ cards, projects }) {
-      const total = cards.length;
-      const inProgress = cards.filter(c => c.status === 'in_progress').length;
-      const anomalies = cards.filter(c => c.is_anomaly && c.status !== 'done').length;
-      const doneThisWeek = cards.filter(c => {
-        if (c.status !== 'done') return false;
-        const updated = new Date(c.updated_at);
-        const weekAgo = new Date(); weekAgo.setDate(weekAgo.getDate() - 7);
-        return updated > weekAgo;
-      }).length;
-
-      const stats = [
-        { label: 'Active', value: total - cards.filter(c => c.status === 'done').length, color: '#f6b93b' },
-        { label: 'In Progress', value: inProgress, color: '#3b82f6' },
-        { label: 'Done (7d)', value: doneThisWeek, color: '#22c55e' },
-        { label: 'Anomalies', value: anomalies, color: anomalies > 0 ? '#ef4444' : '#22c55e' },
-        { label: 'Projects', value: projects.length, color: '#a855f7' },
-      ];
-
-      return (
-        <div className="flex gap-4 overflow-x-auto pb-2">
-          {stats.map(s => (
-            <div key={s.label} className="glass rounded-lg px-4 py-3 min-w-[120px]">
-              <div className="text-2xl font-bold font-mono" style={{ color: s.color }}>{s.value}</div>
-              <div className="text-[10px] font-mono text-gray-500 uppercase tracking-wider mt-0.5">{s.label}</div>
-            </div>
-          ))}
+        <div className={`fixed bottom-6 right-6 z-50 ${colors[type]} border rounded-lg px-4 py-3 text-sm font-mono animate-fade shadow-xl`}>
+          {message}
         </div>
       );
     }
@@ -585,73 +292,209 @@
     }
 
     // ============================================
-    // Toast Notification
+    // KANBAN: Card Component
     // ============================================
-    function Toast({ message, type, onDismiss }) {
-      useEffect(() => {
-        const timer = setTimeout(onDismiss, 3000);
-        return () => clearTimeout(timer);
-      }, []);
-
-      const colors = {
-        success: 'bg-green-500/20 text-green-400 border-green-500/30',
-        error: 'bg-red-500/20 text-red-400 border-red-500/30',
-        info: 'bg-blue-500/20 text-blue-400 border-blue-500/30',
+    function KanbanCard({ card, onEdit, onMove, onDelete, onSync }) {
+      const [dragging, setDragging] = useState(false);
+      const handleDragStart = (e) => {
+        setDragging(true);
+        e.dataTransfer.setData('text/plain', JSON.stringify({ id: card.id, status: card.status }));
+        e.dataTransfer.effectAllowed = 'move';
       };
-
+      const assignee = getAssigneeDisplay(card.assigned_to);
       return (
-        <div className={`fixed bottom-6 right-6 z-50 ${colors[type]} border rounded-lg px-4 py-3 text-sm font-mono animate-fade shadow-xl`}>
-          {message}
+        <div
+          draggable
+          onDragStart={handleDragStart}
+          onDragEnd={() => setDragging(false)}
+          className={`glass glass-hover rounded-lg p-4 mb-3 cursor-grab active:cursor-grabbing transition-all animate-slide priority-${card.priority} ${dragging ? 'card-drag' : ''}`}
+        >
+          <div className="flex items-start justify-between gap-2 mb-2">
+            <h3 className="text-sm font-semibold leading-snug flex-1">
+              {card.is_anomaly && <span className="text-amber-400 mr-1">⚠️</span>}
+              {card.title}
+            </h3>
+          </div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-xs px-2 py-0.5 rounded-full font-mono" style={{
+              background: `${PRIORITY_CONFIG[card.priority]?.color}20`,
+              color: PRIORITY_CONFIG[card.priority]?.color
+            }}>
+              {PRIORITY_CONFIG[card.priority]?.icon} {PRIORITY_CONFIG[card.priority]?.label}
+            </span>
+            {card.project_name && <span className="text-xs text-gray-400 font-mono">{card.project_name}</span>}
+            {assignee && (
+              <span className="text-xs px-2 py-0.5 rounded-full font-mono" style={{
+                background: `${assignee.color}20`, color: assignee.color
+              }}>{assignee.label}</span>
+            )}
+          </div>
+          {card.github_issue_url && (
+            <a href={card.github_issue_url} target="_blank" rel="noopener"
+              className="text-xs text-blue-400 hover:text-blue-300 mt-2 inline-flex items-center gap-1 font-mono">
+              🔗 #{card.github_issue_id}
+            </a>
+          )}
+          <div className="flex items-center justify-between mt-3 pt-3 border-t border-white/5">
+            <code className="text-[10px] text-gray-500 font-mono">{card.id?.substring(0, 8)}</code>
+            <div className="flex gap-1">
+              {!card.github_issue_url && (
+                <button onClick={() => onSync(card)} className="text-xs text-gray-500 hover:text-blue-400 transition-colors px-1.5 py-0.5 rounded hover:bg-blue-400/10" title="Sync to GitHub">🔗</button>
+              )}
+              <button onClick={() => onDelete(card)} className="text-xs text-gray-500 hover:text-red-400 transition-colors px-1.5 py-0.5 rounded hover:bg-red-400/10" title="Delete">🗑️</button>
+              <button onClick={() => onEdit(card)} className="text-xs text-gray-500 hover:text-amber-400 transition-colors px-1.5 py-0.5 rounded hover:bg-amber-400/10" title="Edit">✏️</button>
+            </div>
+          </div>
         </div>
       );
     }
 
     // ============================================
-    // Main Dashboard
+    // KANBAN: Column Component
     // ============================================
-    function Dashboard({ db }) {
-      const [cards, setCards] = useState([]);
-      const [projects, setProjects] = useState([]);
-      const [loading, setLoading] = useState(true);
+    function KanbanColumn({ status, cards, onDrop, onEdit, onDelete, onSync }) {
+      const [dragOver, setDragOver] = useState(false);
+      const config = STATUS_CONFIG[status];
+      const handleDragOver = (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setDragOver(true); };
+      const handleDrop = (e) => {
+        e.preventDefault(); setDragOver(false);
+        try {
+          const data = JSON.parse(e.dataTransfer.getData('text/plain'));
+          if (data.status !== status) onDrop(data.id, status);
+        } catch {}
+      };
+      return (
+        <div
+          className={`kanban-column rounded-xl p-3 transition-all ${dragOver ? 'drop-target' : ''}`}
+          style={{ background: config.bg, minWidth: '250px', flex: '1 1 250px' }}
+          onDragOver={handleDragOver}
+          onDragLeave={() => setDragOver(false)}
+          onDrop={handleDrop}
+        >
+          <div className="flex items-center justify-between mb-4 px-1">
+            <div className="flex items-center gap-2">
+              <span className="text-lg">{config.emoji}</span>
+              <h2 className="text-sm font-bold font-mono uppercase tracking-wider" style={{ color: config.color }}>{config.label}</h2>
+            </div>
+            <span className="text-xs font-mono px-2 py-0.5 rounded-full" style={{ background: `${config.color}20`, color: config.color }}>{cards.length}</span>
+          </div>
+          <div className="space-y-0">
+            {cards.map(card => (
+              <KanbanCard key={card.id} card={card} onEdit={onEdit} onMove={onDrop} onDelete={onDelete} onSync={onSync} />
+            ))}
+            {cards.length === 0 && <div className="text-center py-8 text-gray-600 text-xs font-mono">Drop cards here</div>}
+          </div>
+        </div>
+      );
+    }
+
+    // ============================================
+    // KANBAN: Card Modal (Create/Edit)
+    // ============================================
+    function CardModal({ card, projects, onSave, onClose }) {
+      const [title, setTitle] = useState(card?.title || '');
+      const [description, setDescription] = useState(card?.description || '');
+      const [status, setStatus] = useState(card?.status || 'todo');
+      const [priority, setPriority] = useState(card?.priority || 3);
+      const [projectId, setProjectId] = useState(card?.project_id || (projects[0]?.id || ''));
+      const [assignee, setAssignee] = useState(card?.assigned_to || '');
+      const [customAssignee, setCustomAssignee] = useState('');
+      const [showCustom, setShowCustom] = useState(false);
+      const [saving, setSaving] = useState(false);
+
+      useEffect(() => {
+        if (card?.assigned_to && !ASSIGNEE_PRESETS[card.assigned_to]) {
+          setAssignee('custom'); setCustomAssignee(card.assigned_to); setShowCustom(true);
+        }
+      }, [card]);
+
+      const handleAssigneeChange = (val) => {
+        setAssignee(val);
+        setShowCustom(val === 'custom');
+        if (val !== 'custom') setCustomAssignee('');
+      };
+
+      const handleSave = async () => {
+        if (!title.trim()) return;
+        setSaving(true);
+        const resolvedAssignee = assignee === 'custom' ? customAssignee.trim().toLowerCase() : (assignee || null);
+        await onSave({
+          id: card?.id, title: title.trim(), description: description.trim(),
+          status, priority: parseInt(priority), project_id: projectId,
+          assigned_to: resolvedAssignee || null,
+        });
+        setSaving(false); onClose();
+      };
+
+      return (
+        <div className="fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4" onClick={onClose}>
+          <div className="glass rounded-2xl p-6 w-full max-w-lg animate-fade" onClick={e => e.stopPropagation()}>
+            <h2 className="text-lg font-bold font-mono mb-5">{card ? 'Edit Task' : 'New Task'}</h2>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-xs font-mono text-gray-400 mb-1.5 uppercase tracking-wider">Title</label>
+                <input value={title} onChange={e => setTitle(e.target.value)} placeholder="Task title..." className="w-full" autoFocus />
+              </div>
+              <div>
+                <label className="block text-xs font-mono text-gray-400 mb-1.5 uppercase tracking-wider">Description</label>
+                <textarea value={description} onChange={e => setDescription(e.target.value)} placeholder="Optional details..." className="w-full h-24 resize-none" />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-mono text-gray-400 mb-1.5 uppercase tracking-wider">Status</label>
+                  <select value={status} onChange={e => setStatus(e.target.value)} className="w-full text-sm">
+                    {STATUSES.map(s => <option key={s} value={s}>{STATUS_CONFIG[s].emoji} {STATUS_CONFIG[s].label}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-mono text-gray-400 mb-1.5 uppercase tracking-wider">Priority</label>
+                  <select value={priority} onChange={e => setPriority(e.target.value)} className="w-full text-sm">
+                    {[1,2,3,4,5].map(p => <option key={p} value={p}>{PRIORITY_CONFIG[p].icon} {PRIORITY_CONFIG[p].label}</option>)}
+                  </select>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-mono text-gray-400 mb-1.5 uppercase tracking-wider">Project</label>
+                  <select value={projectId} onChange={e => setProjectId(e.target.value)} className="w-full text-sm">
+                    {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-mono text-gray-400 mb-1.5 uppercase tracking-wider">Assignee</label>
+                  <select value={assignee} onChange={e => handleAssigneeChange(e.target.value)} className="w-full text-sm">
+                    <option value="">Unassigned</option>
+                    {Object.entries(ASSIGNEE_PRESETS).map(([key, val]) => <option key={key} value={key}>{val.label}</option>)}
+                    <option value="custom">✏️ Custom...</option>
+                  </select>
+                </div>
+              </div>
+              {showCustom && (
+                <div className="animate-fade">
+                  <label className="block text-xs font-mono text-gray-400 mb-1.5 uppercase tracking-wider">Custom Assignee Name</label>
+                  <input value={customAssignee} onChange={e => setCustomAssignee(e.target.value)} placeholder="Enter name..." className="w-full text-sm" autoFocus />
+                </div>
+              )}
+            </div>
+            <div className="flex gap-3 mt-6">
+              <button onClick={onClose} className="flex-1 py-2.5 rounded-lg text-sm font-mono text-gray-400 hover:text-white hover:bg-white/5 transition-all">Cancel</button>
+              <button onClick={handleSave} disabled={saving || !title.trim()} className="flex-1 btn-amber py-2.5 rounded-lg text-sm font-mono transition-all disabled:opacity-50">
+                {saving ? 'Saving...' : card ? 'Update' : 'Create'}
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ============================================
+    // KANBAN: Board View
+    // ============================================
+    function BoardView({ db, cards, projects, setCards, showToast, fetchData }) {
       const [filterProject, setFilterProject] = useState('all');
       const [showDone, setShowDone] = useState(false);
-      const [modalCard, setModalCard] = useState(undefined); // undefined=closed, null=new, card=edit
+      const [modalCard, setModalCard] = useState(undefined);
       const [confirmDelete, setConfirmDelete] = useState(null);
-      const [toast, setToast] = useState(null);
-      const [view, setView] = useState('board'); // board | anomalies
-
-      const showToast = (message, type = 'success') => setToast({ message, type });
-
-      const fetchData = useCallback(async () => {
-        try {
-          const [cardsRes, projectsRes] = await Promise.all([
-            db.from('kanban_cards').select('*, projects(name)').order('priority', { ascending: true }).order('created_at', { ascending: false }),
-            db.from('projects').select('*').neq('status', 'archived').order('name'),
-          ]);
-          if (cardsRes.error) throw cardsRes.error;
-          if (projectsRes.error) throw projectsRes.error;
-
-          const mappedCards = (cardsRes.data || []).map(c => ({
-            ...c,
-            project_name: c.projects?.name || projectsRes.data?.find(p => p.id === c.project_id)?.name || ''
-          }));
-
-          setCards(mappedCards);
-          setProjects(projectsRes.data || []);
-        } catch (e) {
-          console.error('Fetch error:', e);
-          showToast(`Failed to load data: ${e.message}`, 'error');
-        }
-        setLoading(false);
-      }, [db]);
-
-      useEffect(() => { fetchData(); }, [fetchData]);
-
-      // Auto-refresh every 30 seconds
-      useEffect(() => {
-        const interval = setInterval(fetchData, 30000);
-        return () => clearInterval(interval);
-      }, [fetchData]);
 
       const handleDrop = async (cardId, newStatus) => {
         setCards(prev => prev.map(c => c.id === cardId ? { ...c, status: newStatus } : c));
@@ -659,34 +502,23 @@
           const { error } = await db.from('kanban_cards').update({ status: newStatus, updated_at: new Date().toISOString() }).eq('id', cardId);
           if (error) throw error;
           showToast(`Moved to ${STATUS_CONFIG[newStatus].label}`);
-        } catch (e) {
-          showToast(`Move failed: ${e.message}`, 'error');
-          fetchData();
-        }
+        } catch (e) { showToast(`Move failed: ${e.message}`, 'error'); fetchData(); }
       };
 
       const handleSave = async (cardData) => {
         try {
           if (cardData.id) {
             const { error } = await db.from('kanban_cards').update({
-              title: cardData.title,
-              description: cardData.description,
-              status: cardData.status,
-              priority: cardData.priority,
-              project_id: cardData.project_id,
-              assigned_to: cardData.assigned_to,
+              title: cardData.title, description: cardData.description, status: cardData.status,
+              priority: cardData.priority, project_id: cardData.project_id, assigned_to: cardData.assigned_to,
               updated_at: new Date().toISOString(),
             }).eq('id', cardData.id);
             if (error) throw error;
             showToast('Task updated');
           } else {
             const insert = {
-              title: cardData.title,
-              description: cardData.description,
-              status: cardData.status,
-              priority: cardData.priority,
-              project_id: cardData.project_id,
-              is_anomaly: false,
+              title: cardData.title, description: cardData.description, status: cardData.status,
+              priority: cardData.priority, project_id: cardData.project_id, is_anomaly: false,
             };
             if (cardData.assigned_to) insert.assigned_to = cardData.assigned_to;
             const { error } = await db.from('kanban_cards').insert(insert);
@@ -694,9 +526,7 @@
             showToast('Task created');
           }
           fetchData();
-        } catch (e) {
-          showToast(`Save failed: ${e.message}`, 'error');
-        }
+        } catch (e) { showToast(`Save failed: ${e.message}`, 'error'); }
       };
 
       const handleDelete = async (card) => {
@@ -705,9 +535,7 @@
           if (error) throw error;
           setCards(prev => prev.filter(c => c.id !== card.id));
           showToast('Task deleted');
-        } catch (e) {
-          showToast(`Delete failed: ${e.message}`, 'error');
-        }
+        } catch (e) { showToast(`Delete failed: ${e.message}`, 'error'); }
         setConfirmDelete(null);
       };
 
@@ -723,78 +551,744 @@
           } else {
             await doGithubSync(card, ghToken);
           }
-        } catch (e) {
-          showToast(`Sync failed: ${e.message}`, 'error');
-        }
+        } catch (e) { showToast(`Sync failed: ${e.message}`, 'error'); }
       };
 
       const doGithubSync = async (card, token) => {
         const project = projects.find(p => p.id === card.project_id);
         const repo = project?.github_repo || 'KDRSparky/sparkybot';
         const [owner, repoName] = repo.includes('/') ? repo.split('/') : ['KDRSparky', repo];
-
-        const body = [
-          card.description || '',
-          '', '---',
-          `_Synced from SparkyBot Dashboard_`,
+        const body = [card.description || '', '', '---', `_Synced from SparkyBot Dashboard_`,
           `**Status:** ${STATUS_CONFIG[card.status]?.emoji} ${STATUS_CONFIG[card.status]?.label}`,
           `**Priority:** ${PRIORITY_CONFIG[card.priority]?.icon} ${PRIORITY_CONFIG[card.priority]?.label}`,
           card.assigned_to ? `**Assigned To:** ${getAssigneeDisplay(card.assigned_to)?.label || card.assigned_to}` : '',
         ].filter(Boolean).join('\n');
-
         const labels = [card.status.replace('_', ' '), `P${card.priority}`];
         if (card.is_anomaly) labels.push('anomaly');
         if (card.assigned_to) labels.push(`assigned:${card.assigned_to}`);
-
         let issueUrl, issueNumber;
         if (card.github_issue_id) {
           const res = await fetch(`https://api.github.com/repos/${owner}/${repoName}/issues/${card.github_issue_id}`, {
-            method: 'PATCH',
-            headers: { 'Authorization': `token ${token}`, 'Accept': 'application/vnd.github.v3+json', 'Content-Type': 'application/json' },
+            method: 'PATCH', headers: { 'Authorization': `token ${token}`, 'Accept': 'application/vnd.github.v3+json', 'Content-Type': 'application/json' },
             body: JSON.stringify({ title: card.title, body, state: card.status === 'done' ? 'closed' : 'open', labels }),
           });
           if (!res.ok) throw new Error(`GitHub ${res.status}`);
-          const issue = await res.json();
-          issueUrl = issue.html_url;
-          issueNumber = issue.number;
+          const issue = await res.json(); issueUrl = issue.html_url; issueNumber = issue.number;
         } else {
           const res = await fetch(`https://api.github.com/repos/${owner}/${repoName}/issues`, {
-            method: 'POST',
-            headers: { 'Authorization': `token ${token}`, 'Accept': 'application/vnd.github.v3+json', 'Content-Type': 'application/json' },
+            method: 'POST', headers: { 'Authorization': `token ${token}`, 'Accept': 'application/vnd.github.v3+json', 'Content-Type': 'application/json' },
             body: JSON.stringify({ title: card.title, body, labels }),
           });
           if (!res.ok) throw new Error(`GitHub ${res.status}`);
-          const issue = await res.json();
-          issueUrl = issue.html_url;
-          issueNumber = issue.number;
+          const issue = await res.json(); issueUrl = issue.html_url; issueNumber = issue.number;
         }
-
-        await db.from('kanban_cards').update({
-          github_issue_id: issueNumber,
-          github_issue_url: issueUrl,
-          updated_at: new Date().toISOString(),
-        }).eq('id', card.id);
-
+        await db.from('kanban_cards').update({ github_issue_id: issueNumber, github_issue_url: issueUrl, updated_at: new Date().toISOString() }).eq('id', card.id);
         fetchData();
         showToast(`Synced to GitHub #${issueNumber}`);
       };
 
-      const handleDisconnect = () => {
-        clearConfig();
-        window.location.reload();
-      };
-
       let filteredCards = cards;
-      if (filterProject !== 'all') {
-        filteredCards = cards.filter(c => c.project_id === filterProject);
-      }
-      if (!showDone) {
-        filteredCards = filteredCards.filter(c => c.status !== 'done');
-      }
-
-      const anomalies = cards.filter(c => c.is_anomaly && c.status !== 'done');
+      if (filterProject !== 'all') filteredCards = cards.filter(c => c.project_id === filterProject);
+      if (!showDone) filteredCards = filteredCards.filter(c => c.status !== 'done');
       const cardsByStatus = {};
       STATUSES.forEach(s => { cardsByStatus[s] = filteredCards.filter(c => c.status === s); });
+
+      return (
+        <div className="animate-fade">
+          <div className="flex items-center gap-3 flex-wrap mb-4">
+            <select value={filterProject} onChange={e => setFilterProject(e.target.value)} className="text-xs font-mono py-1.5 px-2 rounded-lg">
+              <option value="all">All Projects</option>
+              {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+            <label className="flex items-center gap-1.5 text-xs font-mono text-gray-400 cursor-pointer select-none">
+              <input type="checkbox" checked={showDone} onChange={e => setShowDone(e.target.checked)}
+                className="rounded border-gray-600 bg-transparent text-amber-400 focus:ring-amber-400/30" />
+              Show Done
+            </label>
+            <button onClick={() => setModalCard(null)} className="btn-amber px-4 py-1.5 rounded-lg text-xs font-mono transition-all ml-auto">+ New Task</button>
+          </div>
+
+          <div className="flex gap-4 overflow-x-auto pb-4">
+            {STATUSES.filter(s => showDone || s !== 'done').map(status => (
+              <KanbanColumn key={status} status={status} cards={cardsByStatus[status] || []}
+                onDrop={handleDrop} onEdit={setModalCard} onDelete={setConfirmDelete} onSync={handleSync} />
+            ))}
+          </div>
+
+          {modalCard !== undefined && <CardModal card={modalCard} projects={projects} onSave={handleSave} onClose={() => setModalCard(undefined)} />}
+          {confirmDelete && <ConfirmDialog title="Delete Task" message={`Permanently delete "${confirmDelete.title}"?`} onConfirm={() => handleDelete(confirmDelete)} onCancel={() => setConfirmDelete(null)} />}
+        </div>
+      );
+    }
+
+    // ============================================
+    // PORTFOLIO: View
+    // ============================================
+    function PortfolioView({ db, showToast }) {
+      const [snapshots, setSnapshots] = useState([]);
+      const [loading, setLoading] = useState(true);
+      const [days, setDays] = useState(30);
+      const chartRef = useRef(null);
+      const chartInstance = useRef(null);
+
+      useEffect(() => {
+        const fetchSnapshots = async () => {
+          setLoading(true);
+          const since = new Date();
+          since.setDate(since.getDate() - days);
+          const { data, error } = await db.from('portfolio_snapshots')
+            .select('*')
+            .gte('snapshot_date', since.toISOString().split('T')[0])
+            .order('snapshot_date', { ascending: true });
+          if (error) { showToast(`Portfolio load failed: ${error.message}`, 'error'); }
+          setSnapshots(data || []);
+          setLoading(false);
+        };
+        fetchSnapshots();
+      }, [db, days]);
+
+      useEffect(() => {
+        if (!chartRef.current || snapshots.length === 0) return;
+        if (chartInstance.current) chartInstance.current.destroy();
+
+        const labels = snapshots.map(s => {
+          const d = new Date(s.snapshot_date);
+          return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+        });
+        const values = snapshots.map(s => parseFloat(s.total_value) || 0);
+        const changes = snapshots.map(s => parseFloat(s.daily_change_pct) || 0);
+
+        chartInstance.current = new Chart(chartRef.current, {
+          type: 'line',
+          data: {
+            labels,
+            datasets: [{
+              label: 'Portfolio Value ($)',
+              data: values,
+              borderColor: '#f6b93b',
+              backgroundColor: 'rgba(246, 185, 59, 0.1)',
+              borderWidth: 2,
+              fill: true,
+              tension: 0.3,
+              pointRadius: values.length > 30 ? 0 : 3,
+              pointHoverRadius: 5,
+              pointBackgroundColor: '#f6b93b',
+            }],
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              legend: { display: false },
+              tooltip: {
+                backgroundColor: 'rgba(22, 33, 62, 0.95)',
+                titleColor: '#f6b93b',
+                bodyColor: '#e2e8f0',
+                borderColor: 'rgba(246, 185, 59, 0.3)',
+                borderWidth: 1,
+                callbacks: {
+                  label: (ctx) => `$${ctx.parsed.y.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
+                },
+              },
+            },
+            scales: {
+              x: {
+                grid: { color: 'rgba(255,255,255,0.03)' },
+                ticks: { color: '#6b7280', font: { family: 'JetBrains Mono', size: 10 }, maxTicksLimit: 10 },
+              },
+              y: {
+                grid: { color: 'rgba(255,255,255,0.03)' },
+                ticks: {
+                  color: '#6b7280',
+                  font: { family: 'JetBrains Mono', size: 10 },
+                  callback: (v) => '$' + (v / 1000).toFixed(0) + 'k',
+                },
+              },
+            },
+          },
+        });
+
+        return () => { if (chartInstance.current) chartInstance.current.destroy(); };
+      }, [snapshots]);
+
+      const latestSnapshot = snapshots[snapshots.length - 1];
+      const prevSnapshot = snapshots.length > 1 ? snapshots[snapshots.length - 2] : null;
+      const totalValue = latestSnapshot ? parseFloat(latestSnapshot.total_value) : 0;
+      const dailyChange = latestSnapshot ? parseFloat(latestSnapshot.daily_change) : 0;
+      const dailyChangePct = latestSnapshot ? parseFloat(latestSnapshot.daily_change_pct) : 0;
+      const holdings = latestSnapshot?.holdings || [];
+
+      const periodStart = snapshots[0] ? parseFloat(snapshots[0].total_value) : totalValue;
+      const periodChange = totalValue - periodStart;
+      const periodChangePct = periodStart > 0 ? ((periodChange / periodStart) * 100) : 0;
+
+      if (loading) {
+        return <div className="text-center py-16 animate-fade"><div className="text-3xl mb-3 animate-pulse-slow">📈</div><div className="text-sm font-mono text-gray-400">Loading portfolio...</div></div>;
+      }
+
+      return (
+        <div className="animate-fade space-y-6">
+          {/* Summary Cards */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div className="glass rounded-xl p-4">
+              <div className="text-xs font-mono text-gray-500 uppercase tracking-wider mb-1">Total Value</div>
+              <div className="text-2xl font-bold font-mono text-amber-400">
+                ${totalValue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </div>
+            </div>
+            <div className="glass rounded-xl p-4">
+              <div className="text-xs font-mono text-gray-500 uppercase tracking-wider mb-1">Daily Change</div>
+              <div className={`text-2xl font-bold font-mono ${dailyChange >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                {dailyChange >= 0 ? '+' : ''}{dailyChangePct.toFixed(2)}%
+              </div>
+              <div className={`text-xs font-mono ${dailyChange >= 0 ? 'text-green-400/70' : 'text-red-400/70'}`}>
+                {dailyChange >= 0 ? '+' : ''}${dailyChange.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </div>
+            </div>
+            <div className="glass rounded-xl p-4">
+              <div className="text-xs font-mono text-gray-500 uppercase tracking-wider mb-1">{days}d Change</div>
+              <div className={`text-2xl font-bold font-mono ${periodChange >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                {periodChange >= 0 ? '+' : ''}{periodChangePct.toFixed(2)}%
+              </div>
+              <div className={`text-xs font-mono ${periodChange >= 0 ? 'text-green-400/70' : 'text-red-400/70'}`}>
+                {periodChange >= 0 ? '+' : ''}${periodChange.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </div>
+            </div>
+            <div className="glass rounded-xl p-4">
+              <div className="text-xs font-mono text-gray-500 uppercase tracking-wider mb-1">Snapshots</div>
+              <div className="text-2xl font-bold font-mono text-gray-300">{snapshots.length}</div>
+              <div className="text-xs font-mono text-gray-500">{holdings.length} holdings</div>
+            </div>
+          </div>
+
+          {/* Chart */}
+          <div className="glass rounded-xl p-5">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-sm font-bold font-mono">Portfolio Performance</h3>
+              <div className="flex glass rounded-lg overflow-hidden">
+                {[7, 14, 30, 90].map(d => (
+                  <button key={d} onClick={() => setDays(d)}
+                    className={`px-3 py-1 text-xs font-mono transition-all ${days === d ? 'bg-amber-400/20 text-amber-400' : 'text-gray-500 hover:text-white'}`}>
+                    {d}d
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div style={{ height: '300px' }}>
+              {snapshots.length > 0 ? (
+                <canvas ref={chartRef}></canvas>
+              ) : (
+                <div className="flex items-center justify-center h-full text-gray-500 font-mono text-sm">No snapshot data for this period</div>
+              )}
+            </div>
+          </div>
+
+          {/* Holdings Table */}
+          {holdings.length > 0 && (
+            <div className="glass rounded-xl p-5">
+              <h3 className="text-sm font-bold font-mono mb-4">Current Holdings</h3>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-xs font-mono text-gray-500 uppercase tracking-wider border-b border-white/5">
+                      <th className="text-left py-2 px-3">Symbol</th>
+                      <th className="text-right py-2 px-3">Shares</th>
+                      <th className="text-right py-2 px-3">Price</th>
+                      <th className="text-right py-2 px-3">Value</th>
+                      <th className="text-right py-2 px-3">Change</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(Array.isArray(holdings) ? holdings : []).map((h, i) => {
+                      const changePct = h.changePercent || h.change_pct || 0;
+                      return (
+                        <tr key={i} className="border-b border-white/3 hover:bg-white/3 transition-colors">
+                          <td className="py-2.5 px-3 font-mono font-semibold text-amber-400">{h.symbol}</td>
+                          <td className="py-2.5 px-3 text-right font-mono text-gray-400">{h.shares}</td>
+                          <td className="py-2.5 px-3 text-right font-mono">${parseFloat(h.price || 0).toFixed(2)}</td>
+                          <td className="py-2.5 px-3 text-right font-mono">${parseFloat(h.value || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
+                          <td className={`py-2.5 px-3 text-right font-mono ${changePct >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                            {changePct >= 0 ? '+' : ''}{parseFloat(changePct).toFixed(2)}%
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // ============================================
+    // CONVERSATIONS: View
+    // ============================================
+    function ConversationsView({ db, showToast }) {
+      const [messages, setMessages] = useState([]);
+      const [loading, setLoading] = useState(true);
+      const [limit, setLimit] = useState(50);
+      const [searchQuery, setSearchQuery] = useState('');
+
+      useEffect(() => {
+        const fetchMessages = async () => {
+          setLoading(true);
+          let query = db.from('conversations')
+            .select('*')
+            .order('created_at', { ascending: false })
+            .limit(limit);
+          if (searchQuery.trim()) {
+            query = query.ilike('message_text', `%${searchQuery.trim()}%`);
+          }
+          const { data, error } = await query;
+          if (error) { showToast(`Conversations load failed: ${error.message}`, 'error'); }
+          setMessages((data || []).reverse());
+          setLoading(false);
+        };
+        fetchMessages();
+      }, [db, limit, searchQuery]);
+
+      // Group messages by date
+      const groupedByDate = {};
+      messages.forEach(m => {
+        const dateKey = new Date(m.created_at).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+        if (!groupedByDate[dateKey]) groupedByDate[dateKey] = [];
+        groupedByDate[dateKey].push(m);
+      });
+
+      if (loading) {
+        return <div className="text-center py-16 animate-fade"><div className="text-3xl mb-3 animate-pulse-slow">💬</div><div className="text-sm font-mono text-gray-400">Loading conversations...</div></div>;
+      }
+
+      return (
+        <div className="animate-fade max-w-4xl">
+          {/* Controls */}
+          <div className="flex items-center gap-3 flex-wrap mb-5">
+            <div className="flex-1 min-w-[200px]">
+              <input
+                value={searchQuery}
+                onChange={e => setSearchQuery(e.target.value)}
+                placeholder="Search conversations..."
+                className="w-full text-sm font-mono"
+              />
+            </div>
+            <div className="flex glass rounded-lg overflow-hidden">
+              {[50, 100, 200].map(n => (
+                <button key={n} onClick={() => setLimit(n)}
+                  className={`px-3 py-1.5 text-xs font-mono transition-all ${limit === n ? 'bg-amber-400/20 text-amber-400' : 'text-gray-500 hover:text-white'}`}>
+                  {n}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Messages */}
+          {messages.length === 0 ? (
+            <div className="glass rounded-xl p-8 text-center">
+              <div className="text-3xl mb-3">💬</div>
+              <div className="text-sm font-mono text-gray-400">
+                {searchQuery ? 'No messages match your search' : 'No conversation history found'}
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-6">
+              {Object.entries(groupedByDate).map(([date, msgs]) => (
+                <div key={date}>
+                  <div className="flex items-center gap-3 mb-3">
+                    <div className="h-px flex-1 bg-white/5"></div>
+                    <span className="text-xs font-mono text-gray-500 shrink-0">{date}</span>
+                    <div className="h-px flex-1 bg-white/5"></div>
+                  </div>
+                  <div className="space-y-2">
+                    {msgs.map(m => (
+                      <div key={m.id} className={`flex ${m.message_type === 'user' ? 'justify-end' : 'justify-start'}`}>
+                        <div className={`max-w-[80%] rounded-xl px-4 py-3 ${m.message_type === 'user' ? 'chat-bubble-user' : 'chat-bubble-bot'}`}>
+                          <div className="flex items-center gap-2 mb-1">
+                            <span className="text-xs font-mono font-semibold" style={{ color: m.message_type === 'user' ? '#f6b93b' : '#a855f7' }}>
+                              {m.message_type === 'user' ? '👤 You' : '⚡ Sparky'}
+                            </span>
+                            <span className="text-[10px] font-mono text-gray-500">
+                              {new Date(m.created_at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}
+                            </span>
+                            {m.skill_used && m.skill_used !== 'general' && (
+                              <span className="text-[10px] font-mono text-blue-400/60 bg-blue-400/10 px-1.5 py-0.5 rounded">{m.skill_used}</span>
+                            )}
+                          </div>
+                          <div className="text-sm leading-relaxed whitespace-pre-wrap break-words">
+                            {m.message_text.length > 500 ? m.message_text.substring(0, 500) + '...' : m.message_text}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // ============================================
+    // VIP CONTACTS: View
+    // ============================================
+    function VipContactsView({ db, showToast }) {
+      const [contacts, setContacts] = useState([]);
+      const [loading, setLoading] = useState(true);
+      const [editingContact, setEditingContact] = useState(undefined);
+      const [confirmDelete, setConfirmDelete] = useState(null);
+
+      const fetchContacts = useCallback(async () => {
+        const { data, error } = await db.from('vip_contacts')
+          .select('*')
+          .order('priority', { ascending: true })
+          .order('name');
+        if (error) { showToast(`VIP load failed: ${error.message}`, 'error'); }
+        setContacts(data || []);
+        setLoading(false);
+      }, [db]);
+
+      useEffect(() => { fetchContacts(); }, [fetchContacts]);
+
+      const handleSave = async (contactData) => {
+        try {
+          if (contactData.id) {
+            const { error } = await db.from('vip_contacts').update({
+              name: contactData.name, email: contactData.email, phone: contactData.phone,
+              twitter_handle: contactData.twitter_handle, facebook_id: contactData.facebook_id,
+              priority: contactData.priority, notes: contactData.notes, updated_at: new Date().toISOString(),
+            }).eq('id', contactData.id);
+            if (error) throw error;
+            showToast('VIP contact updated');
+          } else {
+            const { error } = await db.from('vip_contacts').insert({
+              name: contactData.name, email: contactData.email, phone: contactData.phone,
+              twitter_handle: contactData.twitter_handle, facebook_id: contactData.facebook_id,
+              priority: contactData.priority, notes: contactData.notes, confirmed: true,
+            });
+            if (error) throw error;
+            showToast('VIP contact added');
+          }
+          fetchContacts();
+        } catch (e) { showToast(`Save failed: ${e.message}`, 'error'); }
+      };
+
+      const handleDelete = async (contact) => {
+        try {
+          const { error } = await db.from('vip_contacts').delete().eq('id', contact.id);
+          if (error) throw error;
+          setContacts(prev => prev.filter(c => c.id !== contact.id));
+          showToast('VIP contact removed');
+        } catch (e) { showToast(`Delete failed: ${e.message}`, 'error'); }
+        setConfirmDelete(null);
+      };
+
+      if (loading) {
+        return <div className="text-center py-16 animate-fade"><div className="text-3xl mb-3 animate-pulse-slow">⭐</div><div className="text-sm font-mono text-gray-400">Loading VIP contacts...</div></div>;
+      }
+
+      const confirmed = contacts.filter(c => c.confirmed);
+      const suggested = contacts.filter(c => c.suggested_by_bot && !c.confirmed);
+
+      return (
+        <div className="animate-fade max-w-4xl">
+          <div className="flex items-center justify-between mb-5">
+            <div className="text-sm font-mono text-gray-400">{contacts.length} VIP contact{contacts.length !== 1 ? 's' : ''}</div>
+            <button onClick={() => setEditingContact(null)} className="btn-amber px-4 py-1.5 rounded-lg text-xs font-mono transition-all">+ Add VIP</button>
+          </div>
+
+          {suggested.length > 0 && (
+            <div className="glass rounded-xl p-4 mb-5 border-l-2 border-amber-400">
+              <div className="flex items-center gap-2 mb-3">
+                <span className="text-lg">🤖</span>
+                <h3 className="text-sm font-bold font-mono text-amber-400">Bot Suggestions</h3>
+              </div>
+              <div className="space-y-2">
+                {suggested.map(c => (
+                  <div key={c.id} className="flex items-center justify-between glass rounded-lg p-3">
+                    <div>
+                      <span className="text-sm font-semibold">{c.name}</span>
+                      {c.email && <span className="text-xs text-gray-400 font-mono ml-2">{c.email}</span>}
+                    </div>
+                    <div className="flex gap-2">
+                      <button onClick={() => handleSave({ ...c, confirmed: true })} className="text-xs text-green-400 hover:bg-green-400/10 px-2 py-1 rounded transition-colors">✓ Confirm</button>
+                      <button onClick={() => setConfirmDelete(c)} className="text-xs text-red-400 hover:bg-red-400/10 px-2 py-1 rounded transition-colors">✕ Reject</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {confirmed.length === 0 ? (
+            <div className="glass rounded-xl p-8 text-center">
+              <div className="text-3xl mb-3">⭐</div>
+              <div className="text-sm font-mono text-gray-400">No VIP contacts yet. Add your most important contacts to get priority alerts.</div>
+            </div>
+          ) : (
+            <div className="grid gap-3 md:grid-cols-2">
+              {confirmed.map(c => (
+                <div key={c.id} className={`glass glass-hover rounded-xl p-4 animate-slide vip-priority-${Math.min(c.priority || 3, 3)}`}>
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex-1">
+                      <h3 className="text-sm font-bold">{c.name}</h3>
+                      <div className="space-y-1 mt-2">
+                        {c.email && <div className="text-xs font-mono text-gray-400 flex items-center gap-1.5">📧 {c.email}</div>}
+                        {c.phone && <div className="text-xs font-mono text-gray-400 flex items-center gap-1.5">📱 {c.phone}</div>}
+                        {c.twitter_handle && <div className="text-xs font-mono text-blue-400 flex items-center gap-1.5">𝕏 @{c.twitter_handle}</div>}
+                        {c.facebook_id && <div className="text-xs font-mono text-blue-400 flex items-center gap-1.5">📘 {c.facebook_id}</div>}
+                      </div>
+                      {c.notes && <div className="text-xs text-gray-500 mt-2 italic">{c.notes}</div>}
+                    </div>
+                    <div className="flex flex-col items-end gap-2">
+                      <span className="text-xs font-mono px-2 py-0.5 rounded-full" style={{
+                        background: `${PRIORITY_CONFIG[Math.min(c.priority || 3, 5)]?.color}20`,
+                        color: PRIORITY_CONFIG[Math.min(c.priority || 3, 5)]?.color,
+                      }}>P{c.priority || 3}</span>
+                      <div className="flex gap-1">
+                        <button onClick={() => setEditingContact(c)} className="text-xs text-gray-500 hover:text-amber-400 transition-colors px-1.5 py-0.5 rounded hover:bg-amber-400/10">✏️</button>
+                        <button onClick={() => setConfirmDelete(c)} className="text-xs text-gray-500 hover:text-red-400 transition-colors px-1.5 py-0.5 rounded hover:bg-red-400/10">🗑️</button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {editingContact !== undefined && (
+            <VipContactModal contact={editingContact} onSave={handleSave} onClose={() => setEditingContact(undefined)} />
+          )}
+          {confirmDelete && <ConfirmDialog title="Remove VIP" message={`Remove "${confirmDelete.name}" from VIP contacts?`} onConfirm={() => handleDelete(confirmDelete)} onCancel={() => setConfirmDelete(null)} />}
+        </div>
+      );
+    }
+
+    // ============================================
+    // VIP CONTACTS: Modal
+    // ============================================
+    function VipContactModal({ contact, onSave, onClose }) {
+      const [name, setName] = useState(contact?.name || '');
+      const [email, setEmail] = useState(contact?.email || '');
+      const [phone, setPhone] = useState(contact?.phone || '');
+      const [twitter, setTwitter] = useState(contact?.twitter_handle || '');
+      const [facebook, setFacebook] = useState(contact?.facebook_id || '');
+      const [priority, setPriority] = useState(contact?.priority || 1);
+      const [notes, setNotes] = useState(contact?.notes || '');
+      const [saving, setSaving] = useState(false);
+
+      const handleSave = async () => {
+        if (!name.trim()) return;
+        setSaving(true);
+        await onSave({
+          id: contact?.id, name: name.trim(), email: email.trim() || null,
+          phone: phone.trim() || null, twitter_handle: twitter.trim() || null,
+          facebook_id: facebook.trim() || null, priority: parseInt(priority),
+          notes: notes.trim() || null,
+        });
+        setSaving(false); onClose();
+      };
+
+      return (
+        <div className="fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4" onClick={onClose}>
+          <div className="glass rounded-2xl p-6 w-full max-w-lg animate-fade" onClick={e => e.stopPropagation()}>
+            <h2 className="text-lg font-bold font-mono mb-5">{contact ? 'Edit VIP Contact' : 'Add VIP Contact'}</h2>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-xs font-mono text-gray-400 mb-1.5 uppercase tracking-wider">Name *</label>
+                <input value={name} onChange={e => setName(e.target.value)} placeholder="Contact name" className="w-full" autoFocus />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-mono text-gray-400 mb-1.5 uppercase tracking-wider">Email</label>
+                  <input value={email} onChange={e => setEmail(e.target.value)} placeholder="email@example.com" className="w-full text-sm" />
+                </div>
+                <div>
+                  <label className="block text-xs font-mono text-gray-400 mb-1.5 uppercase tracking-wider">Phone</label>
+                  <input value={phone} onChange={e => setPhone(e.target.value)} placeholder="+1 555-1234" className="w-full text-sm" />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-mono text-gray-400 mb-1.5 uppercase tracking-wider">X / Twitter</label>
+                  <input value={twitter} onChange={e => setTwitter(e.target.value)} placeholder="handle (no @)" className="w-full text-sm" />
+                </div>
+                <div>
+                  <label className="block text-xs font-mono text-gray-400 mb-1.5 uppercase tracking-wider">Facebook</label>
+                  <input value={facebook} onChange={e => setFacebook(e.target.value)} placeholder="Facebook ID" className="w-full text-sm" />
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-mono text-gray-400 mb-1.5 uppercase tracking-wider">Priority</label>
+                <select value={priority} onChange={e => setPriority(e.target.value)} className="w-full text-sm">
+                  <option value="1">🔴 P1 — Critical (immediate alerts)</option>
+                  <option value="2">🟠 P2 — High (daily digest)</option>
+                  <option value="3">🟡 P3 — Normal</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-mono text-gray-400 mb-1.5 uppercase tracking-wider">Notes</label>
+                <textarea value={notes} onChange={e => setNotes(e.target.value)} placeholder="Optional notes..." className="w-full h-20 resize-none text-sm" />
+              </div>
+            </div>
+            <div className="flex gap-3 mt-6">
+              <button onClick={onClose} className="flex-1 py-2.5 rounded-lg text-sm font-mono text-gray-400 hover:text-white hover:bg-white/5 transition-all">Cancel</button>
+              <button onClick={handleSave} disabled={saving || !name.trim()} className="flex-1 btn-amber py-2.5 rounded-lg text-sm font-mono transition-all disabled:opacity-50">
+                {saving ? 'Saving...' : contact ? 'Update' : 'Add VIP'}
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ============================================
+    // ANOMALIES: View
+    // ============================================
+    function AnomaliesView({ cards }) {
+      const anomalies = cards.filter(c => c.is_anomaly && c.status !== 'done');
+
+      if (anomalies.length === 0) {
+        return (
+          <div className="animate-fade max-w-2xl">
+            <div className="glass rounded-xl p-8 text-center">
+              <div className="text-4xl mb-3">✅</div>
+              <h3 className="text-lg font-bold font-mono mb-2">All Systems Healthy</h3>
+              <p className="text-sm text-gray-400 font-mono">No open anomalies detected</p>
+            </div>
+          </div>
+        );
+      }
+
+      const bySkill = {};
+      anomalies.forEach(a => {
+        const skill = a.anomaly_details?.skillId || 'unknown';
+        bySkill[skill] = (bySkill[skill] || 0) + 1;
+      });
+
+      return (
+        <div className="animate-fade max-w-2xl space-y-4">
+          <div className="glass rounded-xl p-4 border-l-2 border-amber-400">
+            <div className="flex items-center gap-2 mb-3">
+              <span className="text-lg animate-pulse-slow">⚠️</span>
+              <h3 className="text-sm font-bold font-mono text-amber-400">{anomalies.length} Open Anomal{anomalies.length === 1 ? 'y' : 'ies'}</h3>
+            </div>
+            <div className="space-y-2">
+              {Object.entries(bySkill).map(([skill, count]) => (
+                <div key={skill} className="flex items-center justify-between text-xs font-mono">
+                  <span className="text-gray-400">{skill}</span>
+                  <span className="text-amber-400 bg-amber-400/10 px-2 py-0.5 rounded-full">{count}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+          {anomalies.map(a => (
+            <div key={a.id} className={`glass rounded-lg p-4 animate-slide priority-${a.priority}`}>
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-semibold">{a.title}</h3>
+                  {a.anomaly_details && (
+                    <div className="text-xs text-gray-500 font-mono mt-1.5 space-y-0.5">
+                      <div>Skill: {a.anomaly_details.skillId}</div>
+                      <div>Error: {a.anomaly_details.errorMessage?.substring(0, 120)}</div>
+                      <div>Created: {new Date(a.anomaly_details.createdAt || a.created_at).toLocaleDateString()}</div>
+                    </div>
+                  )}
+                </div>
+                <span className="text-xs px-2 py-0.5 rounded-full shrink-0" style={{
+                  background: `${PRIORITY_CONFIG[a.priority]?.color}20`, color: PRIORITY_CONFIG[a.priority]?.color
+                }}>{PRIORITY_CONFIG[a.priority]?.label}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      );
+    }
+
+    // ============================================
+    // STATS BAR
+    // ============================================
+    function StatsBar({ cards, projects, conversations }) {
+      const total = cards.length;
+      const inProgress = cards.filter(c => c.status === 'in_progress').length;
+      const anomalies = cards.filter(c => c.is_anomaly && c.status !== 'done').length;
+      const doneThisWeek = cards.filter(c => {
+        if (c.status !== 'done') return false;
+        const updated = new Date(c.updated_at);
+        const weekAgo = new Date(); weekAgo.setDate(weekAgo.getDate() - 7);
+        return updated > weekAgo;
+      }).length;
+
+      const stats = [
+        { label: 'Active Tasks', value: total - cards.filter(c => c.status === 'done').length, color: '#f6b93b' },
+        { label: 'In Progress', value: inProgress, color: '#3b82f6' },
+        { label: 'Done (7d)', value: doneThisWeek, color: '#22c55e' },
+        { label: 'Anomalies', value: anomalies, color: anomalies > 0 ? '#ef4444' : '#22c55e' },
+        { label: 'Projects', value: projects.length, color: '#a855f7' },
+      ];
+
+      return (
+        <div className="flex gap-4 overflow-x-auto pb-2">
+          {stats.map(s => (
+            <div key={s.label} className="glass rounded-lg px-4 py-3 min-w-[110px]">
+              <div className="text-2xl font-bold font-mono" style={{ color: s.color }}>{s.value}</div>
+              <div className="text-[10px] font-mono text-gray-500 uppercase tracking-wider mt-0.5">{s.label}</div>
+            </div>
+          ))}
+        </div>
+      );
+    }
+
+    // ============================================
+    // MAIN DASHBOARD
+    // ============================================
+    function Dashboard({ db }) {
+      const [cards, setCards] = useState([]);
+      const [projects, setProjects] = useState([]);
+      const [loading, setLoading] = useState(true);
+      const [tab, setTab] = useState('board');
+      const [toast, setToast] = useState(null);
+
+      const showToast = (message, type = 'success') => setToast({ message, type });
+
+      const fetchData = useCallback(async () => {
+        try {
+          const [cardsRes, projectsRes] = await Promise.all([
+            db.from('kanban_cards').select('*, projects(name)').order('priority', { ascending: true }).order('created_at', { ascending: false }),
+            db.from('projects').select('*').neq('status', 'archived').order('name'),
+          ]);
+          if (cardsRes.error) throw cardsRes.error;
+          if (projectsRes.error) throw projectsRes.error;
+          const mappedCards = (cardsRes.data || []).map(c => ({
+            ...c, project_name: c.projects?.name || projectsRes.data?.find(p => p.id === c.project_id)?.name || ''
+          }));
+          setCards(mappedCards);
+          setProjects(projectsRes.data || []);
+        } catch (e) {
+          console.error('Fetch error:', e);
+          showToast(`Failed to load data: ${e.message}`, 'error');
+        }
+        setLoading(false);
+      }, [db]);
+
+      useEffect(() => { fetchData(); }, [fetchData]);
+      useEffect(() => {
+        const interval = setInterval(fetchData, 30000);
+        return () => clearInterval(interval);
+      }, [fetchData]);
+
+      const handleDisconnect = () => { clearConfig(); window.location.reload(); };
+
+      const anomalyCount = cards.filter(c => c.is_anomaly && c.status !== 'done').length;
+
+      const TABS = [
+        { id: 'board', label: 'Board', icon: '📋' },
+        { id: 'portfolio', label: 'Portfolio', icon: '📈' },
+        { id: 'conversations', label: 'Chat Log', icon: '💬' },
+        { id: 'vip', label: 'VIP Contacts', icon: '⭐' },
+        { id: 'anomalies', label: 'Anomalies', icon: '⚠️', badge: anomalyCount },
+      ];
 
       if (loading) {
         return (
@@ -809,6 +1303,7 @@
 
       return (
         <div className="min-h-screen">
+          {/* Header */}
           <header className="sticky top-0 z-40 glass border-b border-white/5">
             <div className="max-w-[1800px] mx-auto px-4 sm:px-6 py-3">
               <div className="flex items-center justify-between flex-wrap gap-3">
@@ -820,119 +1315,48 @@
                   </div>
                 </div>
 
-                <div className="flex items-center gap-3 flex-wrap">
-                  <div className="flex glass rounded-lg overflow-hidden">
-                    <button
-                      onClick={() => setView('board')}
-                      className={`px-3 py-1.5 text-xs font-mono transition-all ${view === 'board' ? 'bg-amber-400/20 text-amber-400' : 'text-gray-400 hover:text-white'}`}
-                    >Board</button>
-                    <button
-                      onClick={() => setView('anomalies')}
-                      className={`px-3 py-1.5 text-xs font-mono transition-all relative ${view === 'anomalies' ? 'bg-amber-400/20 text-amber-400' : 'text-gray-400 hover:text-white'}`}
-                    >
-                      Anomalies
-                      {anomalies.length > 0 && (
-                        <span className="absolute -top-1 -right-1 bg-red-500 text-white text-[9px] w-4 h-4 rounded-full flex items-center justify-center">{anomalies.length}</span>
-                      )}
-                    </button>
-                  </div>
-
-                  <select
-                    value={filterProject}
-                    onChange={e => setFilterProject(e.target.value)}
-                    className="text-xs font-mono py-1.5 px-2 rounded-lg"
-                  >
-                    <option value="all">All Projects</option>
-                    {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                  </select>
-
-                  <label className="flex items-center gap-1.5 text-xs font-mono text-gray-400 cursor-pointer select-none">
-                    <input type="checkbox" checked={showDone} onChange={e => setShowDone(e.target.checked)}
-                      className="rounded border-gray-600 bg-transparent text-amber-400 focus:ring-amber-400/30" />
-                    Done
-                  </label>
-
-                  <button onClick={() => setModalCard(null)} className="btn-amber px-4 py-1.5 rounded-lg text-xs font-mono transition-all">
-                    + New Task
-                  </button>
-
+                <div className="flex items-center gap-2">
                   <button onClick={fetchData} className="text-gray-500 hover:text-amber-400 transition-colors p-1.5" title="Refresh">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M1 4v6h6"/><path d="M3.51 15a9 9 0 102.13-9.36L1 10"/></svg>
                   </button>
-
                   <button onClick={handleDisconnect} className="text-gray-600 hover:text-red-400 transition-colors p-1.5" title="Disconnect">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
                   </button>
                 </div>
               </div>
+
+              {/* Tab Navigation */}
+              <nav className="flex gap-1 mt-3 overflow-x-auto -mb-px">
+                {TABS.map(t => (
+                  <button
+                    key={t.id}
+                    onClick={() => setTab(t.id)}
+                    className={`px-4 py-2 text-xs font-mono transition-all whitespace-nowrap relative ${tab === t.id ? 'tab-active' : 'tab-inactive'}`}
+                  >
+                    <span className="mr-1.5">{t.icon}</span>
+                    {t.label}
+                    {t.badge > 0 && (
+                      <span className="absolute -top-1 -right-1 bg-red-500 text-white text-[9px] w-4 h-4 rounded-full flex items-center justify-center">{t.badge}</span>
+                    )}
+                  </button>
+                ))}
+              </nav>
             </div>
           </header>
 
+          {/* Stats Bar */}
           <div className="max-w-[1800px] mx-auto px-4 sm:px-6 pt-5 pb-3">
             <StatsBar cards={cards} projects={projects} />
           </div>
 
+          {/* Tab Content */}
           <main className="max-w-[1800px] mx-auto px-4 sm:px-6 pb-8">
-            {view === 'board' ? (
-              <div className="flex gap-4 overflow-x-auto pt-3 pb-4">
-                {STATUSES.filter(s => showDone || s !== 'done').map(status => (
-                  <KanbanColumn
-                    key={status}
-                    status={status}
-                    cards={cardsByStatus[status] || []}
-                    onDrop={handleDrop}
-                    onEdit={setModalCard}
-                    onDelete={setConfirmDelete}
-                    onSync={handleSync}
-                  />
-                ))}
-              </div>
-            ) : (
-              <div className="max-w-2xl pt-4 space-y-4">
-                <AnomalyPanel anomalies={anomalies} />
-                {anomalies.map(a => (
-                  <div key={a.id} className={`glass rounded-lg p-4 animate-slide priority-${a.priority}`}>
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <h3 className="text-sm font-semibold">{a.title}</h3>
-                        {a.anomaly_details && (
-                          <div className="text-xs text-gray-500 font-mono mt-1.5 space-y-0.5">
-                            <div>Skill: {a.anomaly_details.skillId}</div>
-                            <div>Error: {a.anomaly_details.errorMessage?.substring(0, 100)}</div>
-                            <div>Created: {new Date(a.anomaly_details.createdAt).toLocaleDateString()}</div>
-                          </div>
-                        )}
-                      </div>
-                      <span className="text-xs px-2 py-0.5 rounded-full shrink-0" style={{
-                        background: `${PRIORITY_CONFIG[a.priority]?.color}20`,
-                        color: PRIORITY_CONFIG[a.priority]?.color
-                      }}>
-                        {PRIORITY_CONFIG[a.priority]?.label}
-                      </span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
+            {tab === 'board' && <BoardView db={db} cards={cards} projects={projects} setCards={setCards} showToast={showToast} fetchData={fetchData} />}
+            {tab === 'portfolio' && <PortfolioView db={db} showToast={showToast} />}
+            {tab === 'conversations' && <ConversationsView db={db} showToast={showToast} />}
+            {tab === 'vip' && <VipContactsView db={db} showToast={showToast} />}
+            {tab === 'anomalies' && <AnomaliesView cards={cards} />}
           </main>
-
-          {modalCard !== undefined && (
-            <CardModal
-              card={modalCard}
-              projects={projects}
-              onSave={handleSave}
-              onClose={() => setModalCard(undefined)}
-            />
-          )}
-
-          {confirmDelete && (
-            <ConfirmDialog
-              title="Delete Task"
-              message={`Permanently delete "${confirmDelete.title}"?`}
-              onConfirm={() => handleDelete(confirmDelete)}
-              onCancel={() => setConfirmDelete(null)}
-            />
-          )}
 
           {toast && <Toast {...toast} onDismiss={() => setToast(null)} />}
         </div>
@@ -944,17 +1368,13 @@
     // ============================================
     function App() {
       const [db, setDb] = useState(null);
-
       useEffect(() => {
         const config = getStoredConfig();
         if (config) {
-          try {
-            const client = createSupabaseClient(config.url, config.key);
-            setDb(client);
-          } catch { clearConfig(); }
+          try { setDb(createSupabaseClient(config.url, config.key)); }
+          catch { clearConfig(); }
         }
       }, []);
-
       if (!db) return <SetupScreen onConnect={setDb} />;
       return <Dashboard db={db} />;
     }
