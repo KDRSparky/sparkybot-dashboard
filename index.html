@@ -704,18 +704,20 @@
     }
 
     // ============================================
-    // Conversations Tab
+    // Conversations Tab (50 messages default, Load More)
     // ============================================
     function ConversationsTab() {
       const [messages, setMessages] = useState([]);
       const [loading, setLoading] = useState(true);
+      const [loadingMore, setLoadingMore] = useState(false);
       const [page, setPage] = useState(0);
       const [hasMore, setHasMore] = useState(true);
       const [filterSkill, setFilterSkill] = useState('all');
       const PAGE_SIZE = 50;
 
       const fetchMessages = useCallback(async (pageNum) => {
-        setLoading(true);
+        if (pageNum === 0) setLoading(true);
+        else setLoadingMore(true);
         const from = (pageNum || 0) * PAGE_SIZE;
         const { data, error } = await db.from('conversations')
           .select('*')
@@ -727,9 +729,16 @@
           setHasMore(data.length === PAGE_SIZE);
         }
         setLoading(false);
+        setLoadingMore(false);
       }, []);
 
       useEffect(() => { fetchMessages(0); }, [fetchMessages]);
+
+      const handleLoadMore = () => {
+        const next = page + 1;
+        setPage(next);
+        fetchMessages(next);
+      };
 
       const skills = useMemo(() => {
         const s = new Set();
@@ -759,7 +768,10 @@
       return (
         <div className="animate-fade">
           <div className="flex items-center justify-between mb-4">
-            <div className="text-xs font-mono text-gray-500">{messages.length} messages loaded</div>
+            <div className="text-xs font-mono text-gray-500">
+              {messages.length} messages loaded
+              {!hasMore && messages.length > 0 && <span className="text-gray-600 ml-1">(all loaded)</span>}
+            </div>
             <select value={filterSkill} onChange={e => setFilterSkill(e.target.value)} className="text-xs font-mono py-1.5 px-2 rounded-lg">
               <option value="all">All Skills</option>
               {skills.map(s => <option key={s} value={s}>{s}</option>)}
@@ -768,9 +780,9 @@
 
           {hasMore && (
             <div className="text-center mb-4">
-              <button onClick={() => { const next = page + 1; setPage(next); fetchMessages(next); }}
-                className="text-xs font-mono text-amber-400 hover:text-amber-300 px-4 py-2 rounded-lg glass glass-hover transition-all">
-                Load older messages...
+              <button onClick={handleLoadMore} disabled={loadingMore}
+                className="text-xs font-mono text-amber-400 hover:text-amber-300 px-4 py-2 rounded-lg glass glass-hover transition-all disabled:opacity-50">
+                {loadingMore ? 'Loading...' : `Load older messages (${PAGE_SIZE} more)`}
               </button>
             </div>
           )}
@@ -966,42 +978,82 @@
     }
 
     // ============================================
-    // Approvals Tab
+    // Approvals Tab (14-day rolling window + Load More)
     // ============================================
+    const APPROVAL_WINDOW_DAYS = 14;
+
     function ApprovalsTab() {
       const [approvals, setApprovals] = useState([]);
       const [loading, setLoading] = useState(true);
+      const [loadingMore, setLoadingMore] = useState(false);
       const [filter, setFilter] = useState('all'); // all | pending | approved | rejected | expired
+      const [windowDays, setWindowDays] = useState(APPROVAL_WINDOW_DAYS);
+      const [hasMore, setHasMore] = useState(true);
 
-      // Fetch approvals
-      const fetchApprovals = useCallback(async () => {
-        try {
-          const { data } = await db.from('approval_queue')
-            .select('*')
-            .order('created_at', { ascending: false })
-            .limit(50);
-          setApprovals(data || []);
-        } catch (e) { console.error('Approvals fetch:', e); }
-        setLoading(false);
+      // Compute the cutoff date for the current window
+      const getCutoffDate = useCallback((days) => {
+        const d = new Date();
+        d.setDate(d.getDate() - days);
+        return d.toISOString();
       }, []);
 
+      // Fetch approvals within the time window
+      const fetchApprovals = useCallback(async (days) => {
+        try {
+          const cutoff = getCutoffDate(days);
+          const { data, count } = await db.from('approval_queue')
+            .select('*', { count: 'exact' })
+            .gte('created_at', cutoff)
+            .order('created_at', { ascending: false });
+          setApprovals(data || []);
+          // If we got fewer results than what a wider window might have, there could be more
+          // We check by peeking one record older than the cutoff
+          if (data && data.length > 0) {
+            const { data: older } = await db.from('approval_queue')
+              .select('id')
+              .lt('created_at', cutoff)
+              .limit(1);
+            setHasMore(older && older.length > 0);
+          } else {
+            // No records in window — check if any exist at all
+            const { data: any } = await db.from('approval_queue')
+              .select('id')
+              .limit(1);
+            setHasMore(any && any.length > 0 && data && data.length === 0 ? false : false);
+            // Actually: if we have 0 in window but records exist before, there's more
+            if (any && any.length > 0 && (!data || data.length === 0)) {
+              setHasMore(true);
+            }
+          }
+        } catch (e) { console.error('Approvals fetch:', e); }
+        setLoading(false);
+        setLoadingMore(false);
+      }, [getCutoffDate]);
+
       useEffect(() => {
-        fetchApprovals();
+        fetchApprovals(windowDays);
 
         // Subscribe to realtime changes on approval_queue
         const channel = db.channel('approvals-realtime')
           .on('postgres_changes', {
-            event: '*', // INSERT, UPDATE, DELETE
+            event: '*',
             schema: 'public',
             table: 'approval_queue',
           }, (payload) => {
             console.log('Realtime approval update:', payload.eventType);
-            fetchApprovals(); // Re-fetch full list on any change
+            fetchApprovals(windowDays);
           })
           .subscribe();
 
         return () => { db.removeChannel(channel); };
-      }, [fetchApprovals]);
+      }, [fetchApprovals, windowDays]);
+
+      const handleLoadMore = () => {
+        setLoadingMore(true);
+        const newDays = windowDays + APPROVAL_WINDOW_DAYS;
+        setWindowDays(newDays);
+        // fetchApprovals will be called via the useEffect dependency on windowDays
+      };
 
       if (loading) return <div className="text-center py-12 text-gray-500 font-mono text-sm animate-pulse-slow">Loading approvals...</div>;
 
@@ -1070,6 +1122,7 @@
               {approvals.length} approval{approvals.length !== 1 ? 's' : ''}
               {pendingCount > 0 && <span className="text-amber-400 ml-2">({pendingCount} pending)</span>}
               <span className="ml-2 text-green-500" title="Realtime updates active">● live</span>
+              <span className="ml-2 text-gray-600">· last {windowDays} days</span>
             </div>
             <div className="flex gap-1">
               {['all', 'pending', 'approved', 'rejected', 'expired'].map(f => (
@@ -1085,7 +1138,7 @@
           {filtered.length === 0 ? (
             <div className="glass rounded-xl p-8 text-center">
               <p className="text-gray-400 font-mono text-sm">
-                {filter === 'pending' ? 'No pending approvals 🎉' : 'No approvals found'}
+                {filter === 'pending' ? 'No pending approvals 🎉' : `No approvals in the last ${windowDays} days`}
               </p>
             </div>
           ) : (
@@ -1119,6 +1172,15 @@
                   </div>
                 );
               })}
+            </div>
+          )}
+
+          {hasMore && (
+            <div className="text-center pt-2">
+              <button onClick={handleLoadMore} disabled={loadingMore}
+                className="text-xs font-mono text-amber-400 hover:text-amber-300 px-4 py-2 rounded-lg glass glass-hover transition-all disabled:opacity-50">
+                {loadingMore ? 'Loading...' : `Load more (+${APPROVAL_WINDOW_DAYS} days)`}
+              </button>
             </div>
           )}
         </div>
@@ -1415,544 +1477,4 @@
 
       return (
         <div className="animate-fade">
-          <div className="flex items-center justify-between gap-3 mb-4 flex-wrap">
-            <div className="flex items-center gap-3">
-              <div className="text-xs font-mono text-gray-500">
-                {skills.length} skill{skills.length !== 1 ? 's' : ''} ({enabledCount} active)
-              </div>
-              {categories.length > 1 && (
-                <select value={filterCat} onChange={e => setFilterCat(e.target.value)} className="text-xs font-mono py-1 px-2 rounded-lg">
-                  <option value="all">All Categories</option>
-                  {categories.map(c => <option key={c} value={c}>{CATEGORY_CONFIG[c]?.icon || '🔧'} {CATEGORY_CONFIG[c]?.label || c}</option>)}
-                </select>
-              )}
-            </div>
-            <button onClick={() => setImporting(true)} className="btn-amber px-4 py-1.5 rounded-lg text-xs font-mono transition-all">+ Import Skill</button>
-          </div>
-
-          {filtered.length === 0 ? (
-            <div className="glass rounded-xl p-8 text-center">
-              <div className="text-3xl mb-3">📦</div>
-              <p className="text-gray-400 font-mono text-sm">No imported skills yet.</p>
-              <p className="text-gray-600 text-xs mt-2">Import a SKILL.md file or use <code className="text-amber-400">/import</code> in Telegram.</p>
-            </div>
-          ) : (
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {filtered.map(s => {
-                const cat = CATEGORY_CONFIG[s.category] || CATEGORY_CONFIG.custom;
-                const isExpanded = expanded === s.skill_id;
-                return (
-                  <div key={s.skill_id} className={`glass rounded-xl p-4 animate-slide transition-all ${!s.enabled ? 'opacity-50' : ''}`}>
-                    <div className="flex items-start justify-between gap-2 mb-2">
-                      <div className="flex items-center gap-2 min-w-0">
-                        <span className="text-lg shrink-0">{cat.icon}</span>
-                        <div className="min-w-0">
-                          <h3 className="text-sm font-semibold truncate">{s.name}</h3>
-                          <code className="text-[10px] font-mono text-gray-600">{s.skill_id}</code>
-                        </div>
-                      </div>
-                      <button onClick={() => handleToggle(s)} className={`shrink-0 w-10 h-5 rounded-full transition-all relative ${s.enabled ? 'bg-green-500/30' : 'bg-gray-700'}`} title={s.enabled ? 'Enabled — click to disable' : 'Disabled — click to enable'}>
-                        <div className={`absolute top-0.5 w-4 h-4 rounded-full transition-all ${s.enabled ? 'left-5 bg-green-400' : 'left-0.5 bg-gray-500'}`} />
-                      </button>
-                    </div>
-
-                    <p className="text-xs text-gray-400 mb-2 line-clamp-2">{s.description}</p>
-
-                    <div className="flex items-center gap-1.5 flex-wrap mb-2">
-                      <span className="text-[10px] px-2 py-0.5 rounded-full font-mono" style={{ background: `${cat.color}20`, color: cat.color }}>
-                        {cat.label}
-                      </span>
-                      <span className="text-[10px] px-2 py-0.5 rounded-full font-mono bg-white/5 text-gray-500">{s.output_format}</span>
-                      {s.autonomy_level === 'approval_required' && (
-                        <span className="text-[10px] px-2 py-0.5 rounded-full font-mono bg-amber-400/10 text-amber-400">🔐 Approval</span>
-                      )}
-                    </div>
-
-                    {s.triggers && s.triggers.length > 0 && (
-                      <div className="flex flex-wrap gap-1 mb-2">
-                        {s.triggers.slice(0, 3).map((t, i) => (
-                          <span key={i} className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-white/5 text-gray-500">"{t}"</span>
-                        ))}
-                        {s.triggers.length > 3 && <span className="text-[9px] font-mono text-gray-600">+{s.triggers.length - 3} more</span>}
-                      </div>
-                    )}
-
-                    {isExpanded && (
-                      <div className="mt-2 animate-fade">
-                        <pre className="text-[10px] font-mono text-gray-500 bg-black/30 rounded-lg p-2.5 max-h-48 overflow-y-auto whitespace-pre-wrap">{s.skill_content}</pre>
-                      </div>
-                    )}
-
-                    <div className="flex items-center justify-between mt-3 pt-3 border-t border-white/5">
-                      <span className="text-[10px] font-mono text-gray-600">{s.updated_at ? timeAgo(s.updated_at) : ''}</span>
-                      <div className="flex gap-1">
-                        <button onClick={() => setExpanded(isExpanded ? null : s.skill_id)} className="text-xs text-gray-500 hover:text-blue-400 transition-colors px-1.5 py-0.5 rounded hover:bg-blue-400/10" title="View content">
-                          {isExpanded ? '📖' : '📄'}
-                        </button>
-                        <button onClick={() => setEditing(s)} className="text-xs text-gray-500 hover:text-amber-400 transition-colors px-1.5 py-0.5 rounded hover:bg-amber-400/10" title="Edit metadata">
-                          ✏️
-                        </button>
-                        <button onClick={() => handleDelete(s)} className="text-xs text-gray-500 hover:text-red-400 transition-colors px-1.5 py-0.5 rounded hover:bg-red-400/10" title="Delete">
-                          🗑️
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-
-          {importing && <SkillImportModal onSave={handleImport} onClose={() => setImporting(false)} />}
-          {editing && <SkillEditModal skill={editing} onSave={handleEditSave} onClose={() => setEditing(null)} />}
-        </div>
-      );
-    }
-
-
-    // ============================================
-    // Confirm Dialog
-    // ============================================
-    function ConfirmDialog({ title, message, onConfirm, onCancel }) {
-      return (
-        <div className="fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4" onClick={onCancel}>
-          <div className="glass rounded-2xl p-6 w-full max-w-sm animate-fade" onClick={e => e.stopPropagation()}>
-            <h2 className="text-lg font-bold font-mono mb-2">{title}</h2>
-            <p className="text-sm text-gray-400 mb-5">{message}</p>
-            <div className="flex gap-3">
-              <button onClick={onCancel} className="flex-1 py-2.5 rounded-lg text-sm font-mono text-gray-400 hover:text-white hover:bg-white/5 transition-all">Cancel</button>
-              <button onClick={onConfirm} className="flex-1 py-2.5 rounded-lg text-sm font-mono bg-red-500/20 text-red-400 hover:bg-red-500/30 transition-all">Delete</button>
-            </div>
-          </div>
-        </div>
-      );
-    }
-
-    // ============================================
-    // Toast Notification
-    // ============================================
-    function Toast({ message, type, onDismiss }) {
-      useEffect(() => {
-        const timer = setTimeout(onDismiss, 3000);
-        return () => clearTimeout(timer);
-      }, []);
-
-      const colors = {
-        success: 'bg-green-500/20 text-green-400 border-green-500/30',
-        error: 'bg-red-500/20 text-red-400 border-red-500/30',
-        info: 'bg-blue-500/20 text-blue-400 border-blue-500/30',
-      };
-
-      return (
-        <div className={`fixed bottom-6 right-6 z-50 ${colors[type]} border rounded-lg px-4 py-3 text-sm font-mono animate-fade shadow-xl`}>
-          {message}
-        </div>
-      );
-    }
-
-    // ============================================
-    // Main Dashboard
-    // ============================================
-    function Dashboard({ user }) {
-      const [cards, setCards] = useState([]);
-      const [projects, setProjects] = useState([]);
-      const [loading, setLoading] = useState(true);
-      const [filterProject, setFilterProject] = useState('all');
-      const [showDone, setShowDone] = useState(false);
-      const [modalCard, setModalCard] = useState(undefined); // undefined=closed, null=new, card=edit
-      const [confirmDelete, setConfirmDelete] = useState(null);
-      const [toast, setToast] = useState(null);
-      const [tab, setTab] = useState('board'); // board | portfolio | conversations | vip | approvals | anomalies
-
-      const showToast = (message, type = 'success') => setToast({ message, type });
-
-      const [snapshots, setSnapshots] = useState([]);
-      const [vipContacts, setVipContacts] = useState([]);
-      const [pendingApprovals, setPendingApprovals] = useState(0);
-
-      const fetchData = useCallback(async () => {
-        try {
-          const [cardsRes, projectsRes] = await Promise.all([
-            db.from('kanban_cards').select('*, projects(name)').order('priority', { ascending: true }).order('created_at', { ascending: false }),
-            db.from('projects').select('*').neq('status', 'archived').order('name'),
-          ]);
-          if (cardsRes.error) throw cardsRes.error;
-
-          const mappedCards = (cardsRes.data || []).map(c => ({
-            ...c,
-            project_name: c.projects?.name || projectsRes.data?.find(p => p.id === c.project_id)?.name || ''
-          }));
-
-          setCards(mappedCards);
-          setProjects(projectsRes.data || []);
-
-          // These tables may not have RLS policies yet — fetch silently
-          try {
-            const snapshotsRes = await db.from('portfolio_snapshots').select('*').order('snapshot_date', { ascending: false }).limit(1);
-            setSnapshots(snapshotsRes.data || []);
-          } catch { setSnapshots([]); }
-
-          try {
-            const vipRes = await db.from('vip_contacts').select('id');
-            setVipContacts(vipRes.data || []);
-          } catch { setVipContacts([]); }
-
-          try {
-            const approvalsRes = await db.from('approval_queue').select('id, status').eq('status', 'pending');
-            setPendingApprovals((approvalsRes.data || []).length);
-          } catch { setPendingApprovals(0); }
-
-        } catch (e) {
-          console.error('Fetch error:', e);
-        }
-        setLoading(false);
-      }, []);
-
-      useEffect(() => { fetchData(); }, [fetchData]);
-
-      // Auto-refresh every 30 seconds
-      useEffect(() => {
-        const interval = setInterval(fetchData, 30000);
-        return () => clearInterval(interval);
-      }, [fetchData]);
-
-      const handleDrop = async (cardId, newStatus) => {
-        setCards(prev => prev.map(c => c.id === cardId ? { ...c, status: newStatus } : c));
-        try {
-          const { error } = await db.from('kanban_cards').update({ status: newStatus, updated_at: new Date().toISOString() }).eq('id', cardId);
-          if (error) throw error;
-          showToast(`Moved to ${STATUS_CONFIG[newStatus].label}`);
-        } catch (e) {
-          showToast(`Move failed: ${e.message}`, 'error');
-          fetchData();
-        }
-      };
-
-      const handleSave = async (cardData) => {
-        try {
-          if (cardData.id) {
-            const { error } = await db.from('kanban_cards').update({
-              title: cardData.title,
-              description: cardData.description,
-              status: cardData.status,
-              priority: cardData.priority,
-              project_id: cardData.project_id,
-              assigned_to: cardData.assigned_to,
-              updated_at: new Date().toISOString(),
-            }).eq('id', cardData.id);
-            if (error) throw error;
-            showToast('Task updated');
-          } else {
-            const insert = {
-              title: cardData.title,
-              description: cardData.description,
-              status: cardData.status,
-              priority: cardData.priority,
-              project_id: cardData.project_id,
-              is_anomaly: false,
-            };
-            if (cardData.assigned_to) insert.assigned_to = cardData.assigned_to;
-            const { error } = await db.from('kanban_cards').insert(insert);
-            if (error) throw error;
-            showToast('Task created');
-          }
-          fetchData();
-        } catch (e) {
-          showToast(`Save failed: ${e.message}`, 'error');
-        }
-      };
-
-      const handleDelete = async (card) => {
-        try {
-          const { error } = await db.from('kanban_cards').delete().eq('id', card.id);
-          if (error) throw error;
-          setCards(prev => prev.filter(c => c.id !== card.id));
-          showToast('Task deleted');
-        } catch (e) {
-          showToast(`Delete failed: ${e.message}`, 'error');
-        }
-        setConfirmDelete(null);
-      };
-
-      const handleSync = async (card) => {
-        showToast('Syncing to GitHub...', 'info');
-        try {
-          const ghToken = localStorage.getItem('gh_token');
-          if (!ghToken) {
-            const token = prompt('Enter your GitHub Personal Access Token (stored locally):');
-            if (!token) return;
-            localStorage.setItem('gh_token', token);
-            await doGithubSync(card, token);
-          } else {
-            await doGithubSync(card, ghToken);
-          }
-        } catch (e) {
-          showToast(`Sync failed: ${e.message}`, 'error');
-        }
-      };
-
-      const doGithubSync = async (card, token) => {
-        const project = projects.find(p => p.id === card.project_id);
-        const repo = project?.github_repo || 'KDRSparky/sparkybot';
-        const [owner, repoName] = repo.includes('/') ? repo.split('/') : ['KDRSparky', repo];
-
-        const body = [
-          card.description || '',
-          '', '---',
-          `_Synced from SparkyBot Dashboard_`,
-          `**Status:** ${STATUS_CONFIG[card.status]?.emoji} ${STATUS_CONFIG[card.status]?.label}`,
-          `**Priority:** ${PRIORITY_CONFIG[card.priority]?.icon} ${PRIORITY_CONFIG[card.priority]?.label}`,
-          card.assigned_to ? `**Assigned To:** ${getAssigneeDisplay(card.assigned_to)?.label || card.assigned_to}` : '',
-        ].filter(Boolean).join('\n');
-
-        const labels = [card.status.replace('_', ' '), `P${card.priority}`];
-        if (card.is_anomaly) labels.push('anomaly');
-        if (card.assigned_to) labels.push(`assigned:${card.assigned_to}`);
-
-        let issueUrl, issueNumber;
-        if (card.github_issue_id) {
-          const res = await fetch(`https://api.github.com/repos/${owner}/${repoName}/issues/${card.github_issue_id}`, {
-            method: 'PATCH',
-            headers: { 'Authorization': `token ${token}`, 'Accept': 'application/vnd.github.v3+json', 'Content-Type': 'application/json' },
-            body: JSON.stringify({ title: card.title, body, state: card.status === 'done' ? 'closed' : 'open', labels }),
-          });
-          if (!res.ok) throw new Error(`GitHub ${res.status}`);
-          const issue = await res.json();
-          issueUrl = issue.html_url;
-          issueNumber = issue.number;
-        } else {
-          const res = await fetch(`https://api.github.com/repos/${owner}/${repoName}/issues`, {
-            method: 'POST',
-            headers: { 'Authorization': `token ${token}`, 'Accept': 'application/vnd.github.v3+json', 'Content-Type': 'application/json' },
-            body: JSON.stringify({ title: card.title, body, labels }),
-          });
-          if (!res.ok) throw new Error(`GitHub ${res.status}`);
-          const issue = await res.json();
-          issueUrl = issue.html_url;
-          issueNumber = issue.number;
-        }
-
-        await db.from('kanban_cards').update({
-          github_issue_id: issueNumber,
-          github_issue_url: issueUrl,
-          updated_at: new Date().toISOString(),
-        }).eq('id', card.id);
-
-        fetchData();
-        showToast(`Synced to GitHub #${issueNumber}`);
-      };
-
-      const handleSignOut = async () => {
-        await signOut();
-      };
-
-      let filteredCards = cards;
-      if (filterProject !== 'all') {
-        filteredCards = cards.filter(c => c.project_id === filterProject);
-      }
-      if (!showDone) {
-        filteredCards = filteredCards.filter(c => c.status !== 'done');
-      }
-
-      const anomalies = cards.filter(c => c.is_anomaly && c.status !== 'done');
-      const cardsByStatus = {};
-      STATUSES.forEach(s => { cardsByStatus[s] = filteredCards.filter(c => c.status === s); });
-
-      if (loading) {
-        return (
-          <div className="min-h-screen flex items-center justify-center">
-            <div className="text-center animate-fade">
-              <div className="text-4xl mb-3 animate-pulse-slow">⚡</div>
-              <div className="text-sm font-mono text-gray-400">Loading command center...</div>
-            </div>
-          </div>
-        );
-      }
-
-      return (
-        <div className="min-h-screen">
-          <header className="sticky top-0 z-40 glass border-b border-white/5">
-            <div className="max-w-[1800px] mx-auto px-4 sm:px-6 py-3">
-              <div className="flex items-center justify-between flex-wrap gap-3">
-                <div className="flex items-center gap-3">
-                  <span className="text-2xl">⚡</span>
-                  <div>
-                    <h1 className="text-base font-bold font-mono tracking-tight">SparkyBot</h1>
-                    <span className="text-[10px] font-mono text-gray-500 uppercase tracking-widest">Command Center</span>
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-3 flex-wrap">
-                  {tab === 'board' && <>
-                    <select
-                    value={filterProject}
-                    onChange={e => setFilterProject(e.target.value)}
-                    className="text-xs font-mono py-1.5 px-2 rounded-lg"
-                  >
-                    <option value="all">All Projects</option>
-                    {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                  </select>
-
-                  <label className="flex items-center gap-1.5 text-xs font-mono text-gray-400 cursor-pointer select-none">
-                    <input type="checkbox" checked={showDone} onChange={e => setShowDone(e.target.checked)}
-                      className="rounded border-gray-600 bg-transparent text-amber-400 focus:ring-amber-400/30" />
-                    Done
-                  </label>
-
-                  <button onClick={() => setModalCard(null)} className="btn-amber px-4 py-1.5 rounded-lg text-xs font-mono transition-all">
-                    + New Task
-                  </button>
-                  </>}
-
-                  <button onClick={fetchData} className="text-gray-500 hover:text-amber-400 transition-colors p-1.5" title="Refresh">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M1 4v6h6"/><path d="M3.51 15a9 9 0 102.13-9.36L1 10"/></svg>
-                  </button>
-
-                  <button onClick={handleSignOut} className="text-gray-600 hover:text-red-400 transition-colors p-1.5 flex items-center gap-2" title="Sign Out">
-                    {user?.user_metadata?.avatar_url && (
-                      <img src={user.user_metadata.avatar_url} alt="" className="w-5 h-5 rounded-full" />
-                    )}
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            {/* Tab Bar */}
-            <div className="max-w-[1800px] mx-auto px-4 sm:px-6">
-              <div className="flex gap-0 overflow-x-auto border-t border-white/5">
-                {[
-                  { id: 'board', label: 'Board', icon: '📋' },
-                  { id: 'portfolio', label: 'Portfolio', icon: '📊' },
-                  { id: 'conversations', label: 'Chat Log', icon: '💬' },
-                  { id: 'vip', label: 'VIP Contacts', icon: '👑' },
-                  { id: 'approvals', label: 'Approvals', icon: '🔐', badge: pendingApprovals || null },
-                  { id: 'skills', label: 'Skills', icon: '📦' },
-                  { id: 'anomalies', label: 'Anomalies', icon: '⚠️', badge: anomalies.length || null },
-                ].map(t => (
-                  <button key={t.id} onClick={() => setTab(t.id)}
-                    className={'px-4 py-2.5 text-xs font-mono transition-all whitespace-nowrap relative ' + (tab === t.id ? 'tab-active' : 'tab-inactive')}>
-                    <span className="mr-1.5">{t.icon}</span>{t.label}
-                    {t.badge > 0 && <span className="absolute -top-0.5 -right-0.5 bg-red-500 text-white text-[9px] w-4 h-4 rounded-full flex items-center justify-center">{t.badge}</span>}
-                  </button>
-                ))}
-              </div>
-            </div>
-          </header>
-
-          <div className="max-w-[1800px] mx-auto px-4 sm:px-6 pt-5 pb-3">
-            <StatsBar cards={cards} projects={projects} snapshots={snapshots} vipContacts={vipContacts} />
-          </div>
-
-          <main className="max-w-[1800px] mx-auto px-4 sm:px-6 pb-8">
-            {tab === 'board' && (
-              <div className="flex gap-4 overflow-x-auto pt-3 pb-4">
-                {STATUSES.filter(s => showDone || s !== 'done').map(status => (
-                  <KanbanColumn key={status} status={status} cards={cardsByStatus[status] || []}
-                    onDrop={handleDrop} onEdit={setModalCard} onDelete={setConfirmDelete} onSync={handleSync} />
-                ))}
-              </div>
-            )}
-
-            {tab === 'portfolio' && <div className="pt-4"><PortfolioTab /></div>}
-            {tab === 'conversations' && <div className="pt-4"><ConversationsTab /></div>}
-            {tab === 'vip' && <div className="pt-4"><VIPContactsTab /></div>}
-
-            {tab === 'approvals' && <div className="pt-4"><ApprovalsTab /></div>}
-            {tab === 'skills' && <div className="pt-4"><SkillsTab showToast={showToast} /></div>}
-
-
-            {tab === 'anomalies' && (
-              <div className="max-w-2xl pt-4 space-y-4">
-                <AnomalyPanel anomalies={anomalies} />
-                {anomalies.map(a => (
-                  <div key={a.id} className={'glass rounded-lg p-4 animate-slide priority-' + a.priority}>
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <h3 className="text-sm font-semibold">{a.title}</h3>
-                        {a.anomaly_details && (
-                          <div className="text-xs text-gray-500 font-mono mt-1.5 space-y-0.5">
-                            <div>Skill: {a.anomaly_details.skillId}</div>
-                            <div>Error: {a.anomaly_details.errorMessage ? a.anomaly_details.errorMessage.substring(0, 100) : ''}</div>
-                            <div>Created: {new Date(a.anomaly_details.createdAt).toLocaleDateString()}</div>
-                          </div>
-                        )}
-                      </div>
-                      <span className="text-xs px-2 py-0.5 rounded-full shrink-0" style={{
-                        background: (PRIORITY_CONFIG[a.priority] ? PRIORITY_CONFIG[a.priority].color : '#666') + '20',
-                        color: PRIORITY_CONFIG[a.priority] ? PRIORITY_CONFIG[a.priority].color : '#666'
-                      }}>
-                        {PRIORITY_CONFIG[a.priority] ? PRIORITY_CONFIG[a.priority].label : 'Unknown'}
-                      </span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </main>
-
-          {modalCard !== undefined && (
-            <CardModal
-              card={modalCard}
-              projects={projects}
-              onSave={handleSave}
-              onClose={() => setModalCard(undefined)}
-            />
-          )}
-
-          {confirmDelete && (
-            <ConfirmDialog
-              title="Delete Task"
-              message={`Permanently delete "${confirmDelete.title}"?`}
-              onConfirm={() => handleDelete(confirmDelete)}
-              onCancel={() => setConfirmDelete(null)}
-            />
-          )}
-
-          {toast && <Toast {...toast} onDismiss={() => setToast(null)} />}
-        </div>
-      );
-    }
-
-    // ============================================
-    // App Root (Auth-aware)
-    // ============================================
-    function App() {
-      const [user, setUser] = useState(null);
-      const [loading, setLoading] = useState(true);
-
-      useEffect(() => {
-        // Check current session
-        db.auth.getSession().then(({ data: { session } }) => {
-          setUser(session?.user ?? null);
-          setLoading(false);
-        });
-
-        // Listen for auth changes (login, logout, token refresh)
-        const { data: { subscription } } = db.auth.onAuthStateChange((_event, session) => {
-          setUser(session?.user ?? null);
-          setLoading(false);
-        });
-
-        return () => subscription.unsubscribe();
-      }, []);
-
-      if (loading) {
-        return (
-          <div className="min-h-screen flex items-center justify-center">
-            <div className="text-center animate-fade">
-              <div className="text-4xl mb-3">⚡</div>
-              <p className="text-gray-400 font-mono text-sm">Loading...</p>
-            </div>
-          </div>
-        );
-      }
-
-      if (!user) return <LoginScreen />;
-      return <Dashboard user={user} />;
-    }
-
-    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
-  </script>
-</body>
-</html>
+          <div className="flex items-center justify-between gap-3
