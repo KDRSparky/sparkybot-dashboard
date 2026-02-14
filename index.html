@@ -729,7 +729,8 @@
         setLoading(false);
       }, []);
 
-      useEffect(() => { fetchMessages(0); 
+      useEffect(() => {
+        fetchMessages(0);
 
         // Subscribe to realtime changes on conversations
         const channel = db.channel('conversations-realtime')
@@ -738,7 +739,6 @@
             schema: 'public',
             table: 'conversations',
           }, () => {
-            // On new message, refresh from page 0
             setPage(0);
             fetchMessages(0);
           })
@@ -1176,6 +1176,9 @@
         </div>
       );
     }
+
+
+    // Skills Manager Tab
     // ============================================
     const CATEGORY_CONFIG = {
       advice:   { label: 'Advice',   color: '#a855f7', icon: '💡' },
