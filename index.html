@@ -985,17 +985,107 @@
     }
 
     // ============================================
-    // Approvals Tab
+    // Approvals Tab (Interactive — approve/reject/expand)
     // ============================================
     const APPROVAL_WINDOW_DAYS = 14;
 
-    function ApprovalsTab() {
+    const APPROVAL_STATUS_CONFIG = {
+      pending:  { color: '#f6b93b', bg: 'rgba(246,185,59,0.15)', label: '⏳ Pending', icon: '⏳' },
+      approved: { color: '#22c55e', bg: 'rgba(34,197,94,0.15)',  label: '✅ Approved', icon: '✅' },
+      rejected: { color: '#ef4444', bg: 'rgba(239,68,68,0.15)',  label: '❌ Rejected', icon: '❌' },
+      modified: { color: '#3b82f6', bg: 'rgba(59,130,246,0.15)', label: '✏️ Modified', icon: '✏️' },
+      expired:  { color: '#6b7280', bg: 'rgba(107,114,128,0.15)', label: '⏰ Expired', icon: '⏰' },
+    };
+
+    const APPROVAL_ACTION_LABELS = {
+      send_email: '📧 Send Email',
+      reply_email: '📧 Reply Email',
+      draft_email: '📝 Draft Email',
+      send_draft: '📤 Send Draft',
+      post_tweet: '🐦 Post Tweet',
+      reply_tweet: '🐦 Reply Tweet',
+      post_facebook: '📘 Post to Facebook',
+    };
+
+    function ApprovalDetailPanel({ approval }) {
+      const details = approval.action_details || {};
+      const isEmail = approval.action_type?.includes('email') || approval.action_type?.includes('draft');
+      const isSocial = approval.action_type?.includes('tweet') || approval.action_type?.includes('facebook');
+
+      return (
+        <div className="mt-3 pt-3 border-t border-white/5 animate-fade space-y-2">
+          {isEmail && (
+            <>
+              {details.to && (
+                <div className="text-xs font-mono">
+                  <span className="text-gray-500">To: </span>
+                  <span className="text-gray-300">{Array.isArray(details.to) ? details.to.join(', ') : details.to}</span>
+                </div>
+              )}
+              {details.subject && (
+                <div className="text-xs font-mono">
+                  <span className="text-gray-500">Subject: </span>
+                  <span className="text-gray-300">{details.subject}</span>
+                </div>
+              )}
+              {details.body && (
+                <div className="text-xs font-mono">
+                  <span className="text-gray-500">Body:</span>
+                  <pre className="text-gray-400 bg-black/30 rounded-lg p-2.5 mt-1 whitespace-pre-wrap max-h-48 overflow-y-auto">{details.body}</pre>
+                </div>
+              )}
+              {details.threadId && (
+                <div className="text-xs font-mono">
+                  <span className="text-gray-500">Thread: </span>
+                  <span className="text-gray-600">{details.threadId}</span>
+                </div>
+              )}
+              {details.draftId && (
+                <div className="text-xs font-mono">
+                  <span className="text-gray-500">Draft ID: </span>
+                  <span className="text-gray-600">{details.draftId}</span>
+                </div>
+              )}
+            </>
+          )}
+          {isSocial && (
+            <div className="text-xs font-mono">
+              <span className="text-gray-500">Content:</span>
+              <pre className="text-gray-400 bg-black/30 rounded-lg p-2.5 mt-1 whitespace-pre-wrap max-h-48 overflow-y-auto">{details.text || details.content || JSON.stringify(details, null, 2)}</pre>
+            </div>
+          )}
+          {!isEmail && !isSocial && (
+            <div className="text-xs font-mono">
+              <span className="text-gray-500">Details:</span>
+              <pre className="text-gray-400 bg-black/30 rounded-lg p-2.5 mt-1 whitespace-pre-wrap max-h-48 overflow-y-auto">{JSON.stringify(details, null, 2)}</pre>
+            </div>
+          )}
+          {approval.user_response && Object.keys(approval.user_response).length > 0 && (
+            <div className="text-xs font-mono">
+              <span className="text-gray-500">Resolution: </span>
+              <span className="text-gray-600">{approval.user_response.action || JSON.stringify(approval.user_response)}</span>
+            </div>
+          )}
+          {details._modified && details._original && (
+            <div className="text-xs font-mono mt-2 p-2 rounded-lg bg-blue-500/10 border border-blue-500/20">
+              <span className="text-blue-400 font-semibold">Modified from original</span>
+              <div className="text-gray-500 mt-1">Original subject: {details._original.subject || '—'}</div>
+              <div className="text-gray-500">Original body: {(details._original.body || '—').substring(0, 100)}{(details._original.body || '').length > 100 ? '...' : ''}</div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    function ApprovalsTab({ showToast }) {
       const [approvals, setApprovals] = useState([]);
       const [loading, setLoading] = useState(true);
       const [loadingMore, setLoadingMore] = useState(false);
-      const [filter, setFilter] = useState('all'); // all | pending | approved | rejected | expired
+      const [filter, setFilter] = useState('all');
       const [windowDays, setWindowDays] = useState(APPROVAL_WINDOW_DAYS);
       const [hasMore, setHasMore] = useState(false);
+      const [expanded, setExpanded] = useState(null); // approval id
+      const [acting, setActing] = useState(null); // approval id currently being acted on
 
       const getCutoffDate = useCallback((days) => {
         const d = new Date();
@@ -1003,7 +1093,6 @@
         return d.toISOString();
       }, []);
 
-      // Fetch approvals within the time window
       const fetchApprovals = useCallback(async (days) => {
         try {
           const cutoff = getCutoffDate(days);
@@ -1012,7 +1101,6 @@
             .gte('created_at', cutoff)
             .order('created_at', { ascending: false });
           setApprovals(data || []);
-          // Check if older records exist beyond the window
           const { data: older } = await db.from('approval_queue')
             .select('id')
             .lt('created_at', cutoff)
@@ -1025,19 +1113,11 @@
 
       useEffect(() => {
         fetchApprovals(windowDays);
-
-        // Subscribe to realtime changes on approval_queue
         const channel = db.channel('approvals-realtime')
-          .on('postgres_changes', {
-            event: '*',
-            schema: 'public',
-            table: 'approval_queue',
-          }, (payload) => {
-            console.log('Realtime approval update:', payload.eventType);
+          .on('postgres_changes', { event: '*', schema: 'public', table: 'approval_queue' }, () => {
             fetchApprovals(windowDays);
           })
           .subscribe();
-
         return () => { db.removeChannel(channel); };
       }, [fetchApprovals, windowDays]);
 
@@ -1046,25 +1126,52 @@
         setWindowDays(prev => prev + APPROVAL_WINDOW_DAYS);
       };
 
+      const handleApprove = async (approval) => {
+        setActing(approval.id);
+        try {
+          // Check expiry
+          if (approval.expires_at && new Date(approval.expires_at) < new Date()) {
+            await db.from('approval_queue').update({
+              status: 'expired', resolved_at: new Date().toISOString(),
+              user_response: { action: 'auto_expired' },
+            }).eq('id', approval.id);
+            showToast('This approval has expired', 'error');
+            fetchApprovals(windowDays);
+            setActing(null);
+            return;
+          }
+          const { error } = await db.from('approval_queue').update({
+            status: 'approved',
+            resolved_at: new Date().toISOString(),
+            user_response: { action: 'approved', source: 'dashboard' },
+          }).eq('id', approval.id).eq('status', 'pending');
+          if (error) throw error;
+          showToast('Approved — action will execute via bot');
+          fetchApprovals(windowDays);
+        } catch (e) {
+          showToast(`Approve failed: ${e.message}`, 'error');
+        }
+        setActing(null);
+      };
+
+      const handleReject = async (approval) => {
+        setActing(approval.id);
+        try {
+          const { error } = await db.from('approval_queue').update({
+            status: 'rejected',
+            resolved_at: new Date().toISOString(),
+            user_response: { action: 'rejected', source: 'dashboard', reason: 'Rejected from dashboard' },
+          }).eq('id', approval.id).eq('status', 'pending');
+          if (error) throw error;
+          showToast('Rejected');
+          fetchApprovals(windowDays);
+        } catch (e) {
+          showToast(`Reject failed: ${e.message}`, 'error');
+        }
+        setActing(null);
+      };
+
       if (loading) return <div className="text-center py-12 text-gray-500 font-mono text-sm animate-pulse-slow">Loading approvals...</div>;
-
-      const STATUS_CONFIG = {
-        pending: { color: '#f6b93b', bg: 'rgba(246,185,59,0.15)', label: '⏳ Pending', icon: '⏳' },
-        approved: { color: '#22c55e', bg: 'rgba(34,197,94,0.15)', label: '✅ Approved', icon: '✅' },
-        rejected: { color: '#ef4444', bg: 'rgba(239,68,68,0.15)', label: '❌ Rejected', icon: '❌' },
-        modified: { color: '#3b82f6', bg: 'rgba(59,130,246,0.15)', label: '✏️ Modified', icon: '✏️' },
-        expired: { color: '#6b7280', bg: 'rgba(107,114,128,0.15)', label: '⏰ Expired', icon: '⏰' },
-      };
-
-      const ACTION_LABELS = {
-        send_email: '📧 Send Email',
-        reply_email: '📧 Reply Email',
-        draft_email: '📝 Draft Email',
-        send_draft: '📤 Send Draft',
-        post_tweet: '🐦 Post Tweet',
-        reply_tweet: '🐦 Reply Tweet',
-        post_facebook: '📘 Post to Facebook',
-      };
 
       const filtered = filter === 'all' ? approvals : approvals.filter(a => a.status === filter);
       const pendingCount = approvals.filter(a => a.status === 'pending').length;
@@ -1125,6 +1232,15 @@
             </div>
           </div>
 
+          {pendingCount > 0 && (
+            <div className="glass rounded-lg p-3 border-l-2 border-amber-400 flex items-center gap-2">
+              <span className="text-xs animate-pulse-slow">⚡</span>
+              <span className="text-xs font-mono text-amber-400/80">
+                Dashboard approvals update the DB. The bot executes approved actions on its next check.
+              </span>
+            </div>
+          )}
+
           {filtered.length === 0 ? (
             <div className="glass rounded-xl p-8 text-center">
               <p className="text-gray-400 font-mono text-sm">
@@ -1134,31 +1250,78 @@
           ) : (
             <div className="space-y-2">
               {filtered.map(a => {
-                const cfg = STATUS_CONFIG[a.status] || STATUS_CONFIG.pending;
+                const cfg = APPROVAL_STATUS_CONFIG[a.status] || APPROVAL_STATUS_CONFIG.pending;
+                const isExpanded = expanded === a.id;
+                const isPending = a.status === 'pending';
+                const isActing = acting === a.id;
+                const isExpiredPending = isPending && a.expires_at && new Date(a.expires_at) < new Date();
+
                 return (
-                  <div key={a.id} className="glass rounded-xl p-4 transition-all hover:ring-1 hover:ring-white/10">
+                  <div key={a.id} className={`glass rounded-xl p-4 transition-all ${isPending ? 'ring-1 ring-amber-400/20 hover:ring-amber-400/40' : 'hover:ring-1 hover:ring-white/10'}`}>
                     <div className="flex items-start justify-between gap-3">
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 mb-1">
                           <span className="text-sm font-mono font-semibold">
-                            {ACTION_LABELS[a.action_type] || a.action_type}
+                            {APPROVAL_ACTION_LABELS[a.action_type] || a.action_type}
                           </span>
                           <span className="text-xs px-2 py-0.5 rounded-full font-mono"
                             style={{ background: cfg.bg, color: cfg.color }}>
                             {cfg.label}
                           </span>
+                          {a.user_response?.source === 'dashboard' && (
+                            <span className="text-[9px] px-1.5 py-0.5 rounded-full font-mono bg-purple-500/15 text-purple-400">
+                              via dashboard
+                            </span>
+                          )}
                         </div>
                         <p className="text-xs text-gray-400 font-mono truncate">{getActionSummary(a)}</p>
                         <div className="flex items-center gap-3 mt-2 text-xs text-gray-600 font-mono">
                           <span>{formatTimeAgo(a.created_at)}</span>
-                          {a.status === 'pending' && a.expires_at && (
-                            <span className="text-amber-500">{formatExpiry(a.expires_at)}</span>
+                          {isPending && a.expires_at && (
+                            <span className={isExpiredPending ? 'text-red-500' : 'text-amber-500'}>
+                              {isExpiredPending ? '⚠️ Expired' : formatExpiry(a.expires_at)}
+                            </span>
                           )}
                           {a.resolved_at && <span>Resolved {formatTimeAgo(a.resolved_at)}</span>}
                           {a.skill_id && <span className="text-gray-700">via {a.skill_id}</span>}
                         </div>
                       </div>
+
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        {/* Expand/collapse button */}
+                        <button
+                          onClick={() => setExpanded(isExpanded ? null : a.id)}
+                          className="text-xs text-gray-500 hover:text-blue-400 transition-colors px-2 py-1.5 rounded-lg hover:bg-blue-400/10"
+                          title={isExpanded ? 'Collapse' : 'View details'}
+                        >
+                          {isExpanded ? '▲' : '▼'}
+                        </button>
+
+                        {/* Action buttons for pending items */}
+                        {isPending && !isExpiredPending && (
+                          <>
+                            <button
+                              onClick={() => handleApprove(a)}
+                              disabled={isActing}
+                              className="text-xs font-mono px-3 py-1.5 rounded-lg transition-all disabled:opacity-50 bg-green-500/15 text-green-400 hover:bg-green-500/25 hover:text-green-300"
+                              title="Approve this action"
+                            >
+                              {isActing ? '...' : '✅ Approve'}
+                            </button>
+                            <button
+                              onClick={() => handleReject(a)}
+                              disabled={isActing}
+                              className="text-xs font-mono px-3 py-1.5 rounded-lg transition-all disabled:opacity-50 bg-red-500/15 text-red-400 hover:bg-red-500/25 hover:text-red-300"
+                              title="Reject this action"
+                            >
+                              {isActing ? '...' : '❌ Reject'}
+                            </button>
+                          </>
+                        )}
+                      </div>
                     </div>
+
+                    {isExpanded && <ApprovalDetailPanel approval={a} />}
                   </div>
                 );
               })}
@@ -1910,7 +2073,7 @@
             {tab === 'conversations' && <div className="pt-4"><ConversationsTab /></div>}
             {tab === 'vip' && <div className="pt-4"><VIPContactsTab /></div>}
 
-            {tab === 'approvals' && <div className="pt-4"><ApprovalsTab /></div>}
+            {tab === 'approvals' && <div className="pt-4"><ApprovalsTab showToast={showToast} /></div>}
             {tab === 'skills' && <div className="pt-4"><SkillsTab showToast={showToast} /></div>}
 
 
