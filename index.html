@@ -973,18 +973,35 @@
       const [loading, setLoading] = useState(true);
       const [filter, setFilter] = useState('all'); // all | pending | approved | rejected | expired
 
-      useEffect(() => {
-        (async () => {
-          try {
-            const { data } = await db.from('approval_queue')
-              .select('*')
-              .order('created_at', { ascending: false })
-              .limit(50);
-            setApprovals(data || []);
-          } catch (e) { console.error('Approvals fetch:', e); }
-          setLoading(false);
-        })();
+      // Fetch approvals
+      const fetchApprovals = useCallback(async () => {
+        try {
+          const { data } = await db.from('approval_queue')
+            .select('*')
+            .order('created_at', { ascending: false })
+            .limit(50);
+          setApprovals(data || []);
+        } catch (e) { console.error('Approvals fetch:', e); }
+        setLoading(false);
       }, []);
+
+      useEffect(() => {
+        fetchApprovals();
+
+        // Subscribe to realtime changes on approval_queue
+        const channel = db.channel('approvals-realtime')
+          .on('postgres_changes', {
+            event: '*', // INSERT, UPDATE, DELETE
+            schema: 'public',
+            table: 'approval_queue',
+          }, (payload) => {
+            console.log('Realtime approval update:', payload.eventType);
+            fetchApprovals(); // Re-fetch full list on any change
+          })
+          .subscribe();
+
+        return () => { db.removeChannel(channel); };
+      }, [fetchApprovals]);
 
       if (loading) return <div className="text-center py-12 text-gray-500 font-mono text-sm animate-pulse-slow">Loading approvals...</div>;
 
@@ -1052,6 +1069,7 @@
             <div className="text-xs font-mono text-gray-500">
               {approvals.length} approval{approvals.length !== 1 ? 's' : ''}
               {pendingCount > 0 && <span className="text-amber-400 ml-2">({pendingCount} pending)</span>}
+              <span className="ml-2 text-green-500" title="Realtime updates active">● live</span>
             </div>
             <div className="flex gap-1">
               {['all', 'pending', 'approved', 'rejected', 'expired'].map(f => (
