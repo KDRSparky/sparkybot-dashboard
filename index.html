@@ -729,7 +729,23 @@
         setLoading(false);
       }, []);
 
-      useEffect(() => { fetchMessages(0); }, [fetchMessages]);
+      useEffect(() => { fetchMessages(0); 
+
+        // Subscribe to realtime changes on conversations
+        const channel = db.channel('conversations-realtime')
+          .on('postgres_changes', {
+            event: 'INSERT',
+            schema: 'public',
+            table: 'conversations',
+          }, () => {
+            // On new message, refresh from page 0
+            setPage(0);
+            fetchMessages(0);
+          })
+          .subscribe();
+
+        return () => { db.removeChannel(channel); };
+      }, [fetchMessages]);
 
       const skills = useMemo(() => {
         const s = new Set();
@@ -759,7 +775,10 @@
       return (
         <div className="animate-fade">
           <div className="flex items-center justify-between mb-4">
-            <div className="text-xs font-mono text-gray-500">{messages.length} messages loaded</div>
+            <div className="text-xs font-mono text-gray-500">
+              {messages.length} messages loaded{hasMore ? '+' : ''}
+              <span className="ml-2 text-green-500" title="Realtime updates active">● live</span>
+            </div>
             <select value={filterSkill} onChange={e => setFilterSkill(e.target.value)} className="text-xs font-mono py-1.5 px-2 rounded-lg">
               <option value="all">All Skills</option>
               {skills.map(s => <option key={s} value={s}>{s}</option>)}
@@ -968,40 +987,64 @@
     // ============================================
     // Approvals Tab
     // ============================================
+    const APPROVAL_WINDOW_DAYS = 14;
+
     function ApprovalsTab() {
       const [approvals, setApprovals] = useState([]);
       const [loading, setLoading] = useState(true);
+      const [loadingMore, setLoadingMore] = useState(false);
       const [filter, setFilter] = useState('all'); // all | pending | approved | rejected | expired
+      const [windowDays, setWindowDays] = useState(APPROVAL_WINDOW_DAYS);
+      const [hasMore, setHasMore] = useState(false);
 
-      // Fetch approvals
-      const fetchApprovals = useCallback(async () => {
-        try {
-          const { data } = await db.from('approval_queue')
-            .select('*')
-            .order('created_at', { ascending: false })
-            .limit(50);
-          setApprovals(data || []);
-        } catch (e) { console.error('Approvals fetch:', e); }
-        setLoading(false);
+      const getCutoffDate = useCallback((days) => {
+        const d = new Date();
+        d.setDate(d.getDate() - days);
+        return d.toISOString();
       }, []);
 
+      // Fetch approvals within the time window
+      const fetchApprovals = useCallback(async (days) => {
+        try {
+          const cutoff = getCutoffDate(days);
+          const { data } = await db.from('approval_queue')
+            .select('*')
+            .gte('created_at', cutoff)
+            .order('created_at', { ascending: false });
+          setApprovals(data || []);
+          // Check if older records exist beyond the window
+          const { data: older } = await db.from('approval_queue')
+            .select('id')
+            .lt('created_at', cutoff)
+            .limit(1);
+          setHasMore(older && older.length > 0);
+        } catch (e) { console.error('Approvals fetch:', e); }
+        setLoading(false);
+        setLoadingMore(false);
+      }, [getCutoffDate]);
+
       useEffect(() => {
-        fetchApprovals();
+        fetchApprovals(windowDays);
 
         // Subscribe to realtime changes on approval_queue
         const channel = db.channel('approvals-realtime')
           .on('postgres_changes', {
-            event: '*', // INSERT, UPDATE, DELETE
+            event: '*',
             schema: 'public',
             table: 'approval_queue',
           }, (payload) => {
             console.log('Realtime approval update:', payload.eventType);
-            fetchApprovals(); // Re-fetch full list on any change
+            fetchApprovals(windowDays);
           })
           .subscribe();
 
         return () => { db.removeChannel(channel); };
-      }, [fetchApprovals]);
+      }, [fetchApprovals, windowDays]);
+
+      const handleLoadMore = () => {
+        setLoadingMore(true);
+        setWindowDays(prev => prev + APPROVAL_WINDOW_DAYS);
+      };
 
       if (loading) return <div className="text-center py-12 text-gray-500 font-mono text-sm animate-pulse-slow">Loading approvals...</div>;
 
@@ -1067,7 +1110,7 @@
         <div className="space-y-4 animate-fade">
           <div className="flex items-center justify-between gap-2 flex-wrap">
             <div className="text-xs font-mono text-gray-500">
-              {approvals.length} approval{approvals.length !== 1 ? 's' : ''}
+              {approvals.length} approval{approvals.length !== 1 ? 's' : ''} · last {windowDays} days
               {pendingCount > 0 && <span className="text-amber-400 ml-2">({pendingCount} pending)</span>}
               <span className="ml-2 text-green-500" title="Realtime updates active">● live</span>
             </div>
@@ -1121,12 +1164,18 @@
               })}
             </div>
           )}
+
+          {hasMore && (
+            <div className="text-center pt-2">
+              <button onClick={handleLoadMore} disabled={loadingMore}
+                className="px-4 py-2 rounded-lg text-xs font-mono bg-white/5 text-gray-400 hover:bg-white/10 hover:text-gray-200 transition-all disabled:opacity-50">
+                {loadingMore ? 'Loading...' : `Load ${APPROVAL_WINDOW_DAYS} more days`}
+              </button>
+            </div>
+          )}
         </div>
       );
     }
-
-
-    // Skills Manager Tab
     // ============================================
     const CATEGORY_CONFIG = {
       advice:   { label: 'Advice',   color: '#a855f7', icon: '💡' },
